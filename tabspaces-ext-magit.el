@@ -222,6 +222,8 @@ This is advice for `magit-worktree-status'."
         (tab-bar-new-tab)
         (tab-bar-rename-tab expected-tab-name)
         (tabspaces-ext--add-project-tab-mapping worktree-path expected-tab-name)
+        (when (fboundp 'project-remember-project)
+          (project-remember-project (project--find-in-directory worktree-path)))
         ;; Temporarily remove hook to prevent duplicate tab
         (remove-hook 'magit-post-display-buffer-hook
                      #'tabspaces-ext-magit--worktree-ensure-tabspace)
