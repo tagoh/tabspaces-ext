@@ -114,9 +114,7 @@ Falls back to `project-current' when the tab map has no entry."
   "Sync treemacs to show the current project for the active tabspaces tab."
   (condition-case err
       (when-let* ((root (tabspaces-ext-treemacs--get-project-root-for-tab))
-                  (workspace (treemacs-current-workspace))
-                  (window (treemacs-get-local-window))
-                  (buffer (window-buffer window)))
+                  (workspace (treemacs-current-workspace)))
         (let* ((projects (treemacs-workspace->projects workspace))
                (paths (mapcar #'treemacs-project->path projects)))
           ;; Only sync if not already showing the correct single project
@@ -129,14 +127,16 @@ Falls back to `project-current' when the tab map has no entry."
             (unless (member root paths)
               (treemacs-do-add-project-to-workspace
                root (file-name-nondirectory (directory-file-name root))))
-            ;; Pulse notification after brief delay for stability
-            (run-with-timer 0.1 nil
-                            (lambda (w b p)
-                              (when (and (window-live-p w) (buffer-live-p b))
-                                (with-selected-window w
-                                  (goto-char (point-min))
-                                  (treemacs-pulse-on-success "Synced to %s" p))))
-                            window buffer (file-name-nondirectory (directory-file-name root))))))
+            ;; Pulse notification if treemacs window is visible
+            (when-let* ((window (treemacs-get-local-window))
+                        (buffer (window-buffer window)))
+              (run-with-timer 0.1 nil
+                              (lambda (w b p)
+                                (when (and (window-live-p w) (buffer-live-p b))
+                                  (with-selected-window w
+                                    (goto-char (point-min))
+                                    (treemacs-pulse-on-success "Synced to %s" p))))
+                              window buffer (file-name-nondirectory (directory-file-name root)))))))
     (error (message "Treemacs sync error: %S" err))))
 
 (let ((last-synced-tab nil)
@@ -157,6 +157,15 @@ Falls back to `project-current' when the tab map has no entry."
       (cancel-timer pending-timer))
     (setq pending-timer
           (run-with-idle-timer 0.3 nil #'tabspaces-ext-treemacs--sync-with-tabspaces)))
+
+  (defun tabspaces-ext-treemacs--handle-magit-buffer (&rest _)
+    "Sync treemacs when a magit status buffer is displayed.
+This handles worktree switches that may not trigger tab-bar hooks."
+    (when (derived-mode-p 'magit-status-mode)
+      (when (timerp pending-timer)
+        (cancel-timer pending-timer))
+      (setq pending-timer
+            (run-with-idle-timer 0.5 nil #'tabspaces-ext-treemacs--sync-with-tabspaces))))
 
   (defun tabspaces-ext-treemacs--reset-state ()
     "Reset internal state for clean teardown/re-enable."
@@ -195,6 +204,9 @@ Falls back to `project-current' when the tab map has no entry."
     ;; Install hooks
     (add-hook 'tab-bar-tab-post-select-functions #'tabspaces-ext-treemacs--handle-tab-switch)
     (advice-add 'treemacs :after #'tabspaces-ext-treemacs--treemacs-opened)
+    ;; Sync treemacs when magit displays a status buffer (worktree switches)
+    (with-eval-after-load 'magit
+      (add-hook 'magit-post-display-buffer-hook #'tabspaces-ext-treemacs--handle-magit-buffer))
     ;; Note: buffer kind registration is done early by register-buffer-kind function
     (setq tabspaces-ext-treemacs--active t)))
 
@@ -204,6 +216,7 @@ Falls back to `project-current' when the tab map has no entry."
   (when tabspaces-ext-treemacs--active
     (remove-hook 'tab-bar-tab-post-select-functions #'tabspaces-ext-treemacs--handle-tab-switch)
     (advice-remove 'treemacs #'tabspaces-ext-treemacs--treemacs-opened)
+    (remove-hook 'magit-post-display-buffer-hook #'tabspaces-ext-treemacs--handle-magit-buffer)
     (tabspaces-ext-treemacs--reset-state)
     (setq tabspaces-ext-treemacs--active nil)))
 
