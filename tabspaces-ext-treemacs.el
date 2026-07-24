@@ -99,11 +99,16 @@ before treemacs is loaded, to support session restoration."
 ;;; Treemacs sync functions
 
 (defun tabspaces-ext-treemacs--get-project-root-for-tab ()
-  "Get project root for current tabspaces tab."
-  (when-let* ((tab-name (tabspaces-ext--get-current-tab-name))
-              ((boundp 'tabspaces-project-tab-map))
-              (root (car (rassoc tab-name tabspaces-project-tab-map))))
-    (expand-file-name root)))
+  "Get project root for current tabspaces tab.
+Falls back to `project-current' when the tab map has no entry."
+  (let ((tab-name (tabspaces-ext--get-current-tab-name)))
+    (when tab-name
+      (let ((from-map (and (boundp 'tabspaces-project-tab-map)
+                           (car (rassoc tab-name tabspaces-project-tab-map)))))
+        (if (and from-map (file-directory-p from-map))
+            (expand-file-name from-map)
+          (when-let ((proj (project-current)))
+            (expand-file-name (project-root proj))))))))
 
 (defun tabspaces-ext-treemacs--sync-with-tabspaces ()
   "Sync treemacs to show the current project for the active tabspaces tab."
@@ -134,18 +139,31 @@ before treemacs is loaded, to support session restoration."
                             window buffer (file-name-nondirectory (directory-file-name root))))))
     (error (message "Treemacs sync error: %S" err))))
 
-;; Track last synced tab using closure to avoid global state
-(let ((last-synced-tab nil))
+(let ((last-synced-tab nil)
+      (pending-timer nil))
   (defun tabspaces-ext-treemacs--handle-tab-switch (&rest _)
     "Handle treemacs updates when switching tabspaces tabs."
     (let ((current-tab (tabspaces-ext--get-current-tab-name)))
       (unless (equal current-tab last-synced-tab)
         (setq last-synced-tab current-tab)
-        (run-with-idle-timer 0.3 nil #'tabspaces-ext-treemacs--sync-with-tabspaces)))))
+        (when (timerp pending-timer)
+          (cancel-timer pending-timer))
+        (setq pending-timer
+              (run-with-idle-timer 0.3 nil #'tabspaces-ext-treemacs--sync-with-tabspaces)))))
 
-(defun tabspaces-ext-treemacs--treemacs-opened (&rest _)
-  "Sync treemacs when it's opened."
-  (run-with-idle-timer 0.3 nil #'tabspaces-ext-treemacs--sync-with-tabspaces))
+  (defun tabspaces-ext-treemacs--treemacs-opened (&rest _)
+    "Sync treemacs when it's opened."
+    (when (timerp pending-timer)
+      (cancel-timer pending-timer))
+    (setq pending-timer
+          (run-with-idle-timer 0.3 nil #'tabspaces-ext-treemacs--sync-with-tabspaces)))
+
+  (defun tabspaces-ext-treemacs--reset-state ()
+    "Reset internal state for clean teardown/re-enable."
+    (when (timerp pending-timer)
+      (cancel-timer pending-timer))
+    (setq pending-timer nil
+          last-synced-tab nil)))
 
 ;;; Debug function
 
@@ -186,6 +204,7 @@ before treemacs is loaded, to support session restoration."
   (when tabspaces-ext-treemacs--active
     (remove-hook 'tab-bar-tab-post-select-functions #'tabspaces-ext-treemacs--handle-tab-switch)
     (advice-remove 'treemacs #'tabspaces-ext-treemacs--treemacs-opened)
+    (tabspaces-ext-treemacs--reset-state)
     (setq tabspaces-ext-treemacs--active nil)))
 
 (provide 'tabspaces-ext-treemacs)

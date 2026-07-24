@@ -138,6 +138,12 @@ When non-nil, creates separate popterm instances per tab."
         (unless (string= (cdr existing) tab-name)
           (message "Updating tab mapping: %s -> %s (was %s)" project-root tab-name (cdr existing))
           (setf (cdr existing) tab-name))
+      ;; Remove stale entries that map a different root to the same tab name
+      (setq tabspaces-project-tab-map
+            (cl-remove-if (lambda (entry)
+                            (and (string= (cdr entry) tab-name)
+                                 (not (string= (car entry) project-root))))
+                          tabspaces-project-tab-map))
       ;; Add new mapping
       (message "Adding new tab mapping: %s -> %s" project-root tab-name)
       (push (cons project-root tab-name) tabspaces-project-tab-map))))
