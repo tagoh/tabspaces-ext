@@ -235,12 +235,13 @@ This is advice for `magit-worktree-status'."
 (defun tabspaces-ext-magit--worktree-delete-advice (orig-fun &rest args)
   "Delete worktree and clean up associated tab and buffers.
 This is advice for `magit-worktree-delete'."
-  (let ((current-tab-name (tabspaces-ext--get-current-tab-name))
-        (project-root (when default-directory
-                        (expand-file-name default-directory))))
+  (let* ((worktree-path (expand-file-name (car args)))
+         (target-tab-name
+          (let ((default-directory worktree-path))
+            (funcall tabspaces-ext-magit-tab-name-function worktree-path))))
 
-    (if (or (not current-tab-name)
-            (string= current-tab-name "Default"))
+    (if (or (not target-tab-name)
+            (string= target-tab-name "Default"))
         ;; No special tab handling needed
         (apply orig-fun args)
 
@@ -248,19 +249,18 @@ This is advice for `magit-worktree-delete'."
       (apply orig-fun args)
 
       ;; Clean up buffers associated with the deleted worktree
-      (when project-root
-        (tabspaces-ext-magit--kill-worktree-buffers project-root))
+      (tabspaces-ext-magit--kill-worktree-buffers worktree-path)
 
       ;; Forget project
-      (when (and project-root (fboundp 'project-forget-project))
-        (project-forget-project project-root))
+      (when (fboundp 'project-forget-project)
+        (project-forget-project worktree-path))
 
       ;; Close the tab
-      (when (and current-tab-name
-                 (stringp current-tab-name)
-                 (not (string-empty-p current-tab-name)))
+      (when (and target-tab-name
+                 (stringp target-tab-name)
+                 (not (string-empty-p target-tab-name)))
         (let ((tab-bar-tab-prevent-close-functions nil))
-          (tab-bar-close-tab-by-name current-tab-name)))
+          (tab-bar-close-tab-by-name target-tab-name)))
 
       ;; Refresh magit if still in a magit buffer
       (when (and (derived-mode-p 'magit-mode) (magit-gitdir))
