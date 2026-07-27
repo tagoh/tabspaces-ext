@@ -300,13 +300,42 @@ Fixes tabspaces bug where placeholder tabs aren't automatically cleaned up."
 This uses window-state-plus to avoid layout corruption with side windows."
   (window-state-plus-advice-save-session orig-fun args))
 
+(defun tabspaces-ext-magit--repair-project-tab-mappings ()
+  "Re-populate missing `tabspaces-project-tab-map' entries for existing tabs.
+The magit advice on `tabspaces-generate-descriptive-tab-name' is bypassed
+during session restore (placeholder buffer check), so project@branch tabs
+restored from the global session file lose their mapping.  Without a mapping,
+`tabspaces-save-all-project-sessions' treats them as non-project tabs,
+perpetuating the loss across restarts.
+This function scans the known project list to find matching roots and
+restores the missing entries."
+  (when (and (boundp 'tabspaces-project-tab-map)
+             (boundp 'project--list)
+             (fboundp 'magit-toplevel))
+    (let ((tab-names (tabspaces-ext--get-all-tab-names))
+          (mapped-tabs (mapcar #'cdr tabspaces-project-tab-map)))
+      (dolist (tab-name tab-names)
+        (when (and (string-match-p "@" tab-name)
+                   (not (member tab-name mapped-tabs)))
+          (catch 'found
+            (dolist (project-entry project--list)
+              (let ((project-root (expand-file-name (car project-entry))))
+                (when (file-directory-p project-root)
+                  (let ((default-directory project-root))
+                    (when (condition-case nil (magit-toplevel) (error nil))
+                      (let ((expected (funcall tabspaces-ext-magit-tab-name-function)))
+                        (when (string= expected tab-name)
+                          (tabspaces-ext--add-project-tab-mapping
+                           project-root tab-name)
+                          (throw 'found t))))))))))))))
+
 (defun tabspaces-ext-magit--restore-session-advice (&rest _)
   "Cleanup after tabspaces session restoration."
   (tabspaces-ext-magit--cleanup-placeholder-tabs)
-  ;; Clean up duplicate entries that may have been loaded
   (when (boundp 'tabspaces-project-tab-map)
     (setq tabspaces-project-tab-map
-          (delete-dups tabspaces-project-tab-map))))
+          (delete-dups tabspaces-project-tab-map)))
+  (tabspaces-ext-magit--repair-project-tab-mappings))
 
 ;;; Setup/teardown functions
 
@@ -337,7 +366,11 @@ Magit doesn't need custom buffer kinds, so this is a no-op for consistency."
                 #'tabspaces-ext-magit--save-session-advice)
     (advice-add 'tabspaces-restore-session :after
                 #'tabspaces-ext-magit--restore-session-advice)
-    (setq tabspaces-ext-magit--active t)))
+    (setq tabspaces-ext-magit--active t)
+    ;; Repair mappings lost during session restore (the :after advice on
+    ;; tabspaces-restore-session is not yet active when the initial startup
+    ;; restore runs, because magit hasn't loaded yet at that point).
+    (tabspaces-ext-magit--repair-project-tab-mappings)))
 
 ;;;###autoload
 (defun tabspaces-ext-magit-teardown ()
