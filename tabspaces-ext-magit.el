@@ -156,8 +156,9 @@ Optional WORKTREE-PATH for worktree-specific branch detection."
               (buf-dir (ignore-errors
                          (buffer-local-value 'default-directory buf)))
               (buf-name (buffer-name buf)))
-          ;; Kill buffers from deleted worktree (but not system buffers)
           (when (and (not (tabspaces-ext--is-system-buffer-p buf-name))
+                     (not (eq (buffer-local-value 'major-mode buf)
+                              'treemacs-mode))
                      (or (and buf-file
                               (string-prefix-p project-root
                                                (expand-file-name buf-file)))
@@ -258,9 +259,15 @@ This is advice for `magit-worktree-delete'."
       ;; Close the tab
       (when (and target-tab-name
                  (stringp target-tab-name)
-                 (not (string-empty-p target-tab-name)))
+                 (not (string-empty-p target-tab-name))
+                 (member target-tab-name (tabspaces-ext--get-all-tab-names)))
         (let ((tab-bar-tab-prevent-close-functions nil))
           (tab-bar-close-tab-by-name target-tab-name)))
+
+      ;; Sync treemacs to show the correct project after tab switch
+      (when (and (featurep 'treemacs)
+                 (fboundp 'tabspaces-ext-treemacs--sync-with-tabspaces))
+        (tabspaces-ext-treemacs--sync-with-tabspaces))
 
       ;; Refresh magit if still in a magit buffer
       (when (and (derived-mode-p 'magit-mode) (magit-gitdir))
