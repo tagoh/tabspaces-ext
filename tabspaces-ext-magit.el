@@ -235,7 +235,9 @@ This is advice for `magit-worktree-status'."
 
 (defun tabspaces-ext-magit--worktree-delete-advice (orig-fun &rest args)
   "Delete worktree and clean up associated tab and buffers.
-This is advice for `magit-worktree-delete'."
+This is advice for `magit-worktree-delete'.
+Cleanup is deferred so that pending file-notify events are dispatched
+with valid callbacks before buffers are killed."
   (let* ((worktree-path (expand-file-name (car args)))
          (target-tab-name
           (let ((default-directory worktree-path))
@@ -243,35 +245,41 @@ This is advice for `magit-worktree-delete'."
 
     (if (or (not target-tab-name)
             (string= target-tab-name "Default"))
-        ;; No special tab handling needed
         (apply orig-fun args)
 
-      ;; Delete worktree and manage tab
+      ;; Delete worktree (synchronous directory removal + async git prune)
       (apply orig-fun args)
 
-      ;; Clean up buffers associated with the deleted worktree
-      (tabspaces-ext-magit--kill-worktree-buffers worktree-path)
+      ;; Defer cleanup to let pending file-notify events be processed
+      ;; with their original valid callbacks before we kill buffers.
+      (run-at-time 0 nil
+                   #'tabspaces-ext-magit--worktree-post-delete-cleanup
+                   worktree-path target-tab-name))))
 
-      ;; Forget project
-      (when (fboundp 'project-forget-project)
-        (project-forget-project worktree-path))
+(defun tabspaces-ext-magit--worktree-post-delete-cleanup (worktree-path target-tab-name)
+  "Clean up buffers, tab, and treemacs state after worktree deletion."
+  (condition-case err
+      (progn
+        (tabspaces-ext-magit--kill-worktree-buffers worktree-path)
 
-      ;; Close the tab
-      (when (and target-tab-name
-                 (stringp target-tab-name)
-                 (not (string-empty-p target-tab-name))
-                 (member target-tab-name (tabspaces-ext--get-all-tab-names)))
-        (let ((tab-bar-tab-prevent-close-functions nil))
-          (tab-bar-close-tab-by-name target-tab-name)))
+        (when (fboundp 'project-forget-project)
+          (project-forget-project worktree-path))
 
-      ;; Sync treemacs to show the correct project after tab switch
-      (when (and (featurep 'treemacs)
-                 (fboundp 'tabspaces-ext-treemacs--sync-with-tabspaces))
-        (tabspaces-ext-treemacs--sync-with-tabspaces))
+        (when (and target-tab-name
+                   (stringp target-tab-name)
+                   (not (string-empty-p target-tab-name))
+                   (member target-tab-name (tabspaces-ext--get-all-tab-names)))
+          (let ((tab-bar-tab-prevent-close-functions nil))
+            (tab-bar-close-tab-by-name target-tab-name)))
 
-      ;; Refresh magit if still in a magit buffer
-      (when (and (derived-mode-p 'magit-mode) (magit-gitdir))
-        (magit-refresh)))))
+        (when (and (featurep 'treemacs)
+                   (fboundp 'tabspaces-ext-treemacs--sync-with-tabspaces))
+          (tabspaces-ext-treemacs--sync-with-tabspaces))
+
+        (when (and (derived-mode-p 'magit-mode)
+                   (ignore-errors (magit-gitdir)))
+          (ignore-errors (magit-refresh))))
+    (error (message "tabspaces-ext: worktree cleanup error: %S" err))))
 
 ;;; Tabspaces integration
 
