@@ -273,6 +273,66 @@ then sets up full integration after the package loads."
         (funcall teardown-fn))))
   (setq tabspaces-ext--integrations-loaded nil))
 
+;;; Session cleanup
+
+(defun tabspaces-ext-cleanup-sessions ()
+  "Delete stale per-project session files.
+Scans the session store directory for session files and deletes those
+whose project directory no longer exists, or whose session data contains
+stale tab names (e.g. project@branch for a non-git directory)."
+  (interactive)
+  (let ((store (and (boundp 'tabspaces-session-project-session-store)
+                    tabspaces-session-project-session-store)))
+    (unless (and (stringp store) (file-directory-p store))
+      (user-error "No session store directory configured"))
+    (let ((files (directory-files store t "\\`\\..*-tabspaces-session\\.el\\'"))
+          (removed 0)
+          (kept 0))
+      (dolist (file files)
+        (if (tabspaces-ext--session-file-stale-p file)
+            (progn
+              (delete-file file)
+              (cl-incf removed))
+          (cl-incf kept)))
+      (message "Session cleanup: removed %d stale file(s), kept %d" removed kept))))
+
+(defun tabspaces-ext--session-file-stale-p (file)
+  "Return non-nil if session FILE is stale and should be removed.
+A session file is stale if its project root directory no longer exists,
+or if the session tab name contains @ but the project root has no .git."
+  (let ((data (tabspaces-ext--session-file-data file)))
+    (or (null data)
+        (not (file-directory-p (car data)))
+        (and (string-match-p "@" (cdr data))
+             (not (file-exists-p
+                   (expand-file-name ".git" (expand-file-name (car data)))))))))
+
+(defun tabspaces-ext--session-file-data (file)
+  "Extract project root and tab name from a tabspaces session FILE.
+Returns (ROOT . TAB-NAME) or nil on failure."
+  (condition-case nil
+      (with-temp-buffer
+        (insert-file-contents file)
+        (goto-char (point-min))
+        (let (map session-list)
+          (while (not (eobp))
+            (let ((form (condition-case nil
+                            (read (current-buffer))
+                          (end-of-file nil))))
+              (when form
+                (pcase form
+                  (`(setq tabspaces-project-tab-map (quote ,val))
+                   (setq map val))
+                  (`(setq tabspaces--session-list (quote ,val))
+                   (setq session-list val))))))
+          (when session-list
+            (let* ((tab-name (cadr (car session-list)))
+                   (root (or (car (rassoc tab-name map))
+                             (caar map))))
+              (when root
+                (cons root tab-name))))))
+    (error nil)))
+
 ;;; Minor mode
 
 ;;;###autoload

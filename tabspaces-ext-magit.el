@@ -179,10 +179,15 @@ Optional WORKTREE-PATH for worktree-specific branch detection."
              (not (get-buffer "*tabspaces--placeholder*")))
     (let* ((project-root (expand-file-name default-directory))
            (current-tab-name (tabspaces-ext--get-current-tab-name))
+           (current-tab-project
+            (car (rassoc current-tab-name tabspaces-project-tab-map)))
            (expected-tab-name (funcall tabspaces-ext-magit-tab-name-function))
            (magit-buffer (current-buffer)))
       (when (and expected-tab-name
-                 (not (string= current-tab-name expected-tab-name)))
+                 (not (string= current-tab-name expected-tab-name))
+                 (or (null current-tab-project)
+                     (file-exists-p
+                      (expand-file-name ".git" current-tab-project))))
         ;; Switch to or create the appropriate tab
         (if (member expected-tab-name (tabspaces-ext--get-all-tab-names))
             ;; Switch to existing tab
@@ -290,7 +295,8 @@ This is advice for `tabspaces-generate-descriptive-tab-name'."
       ;; Don't interfere during session restoration
       (funcall orig-fun project-path existing-tab-names)
     (let ((default-directory project-path))
-      (if (and (fboundp 'magit-toplevel)
+      (if (and (file-exists-p (expand-file-name ".git" project-path))
+               (fboundp 'magit-toplevel)
                (condition-case nil (magit-toplevel) (error nil)))
           ;; Git repository: use project@branch format
           (let ((tab-name (funcall tabspaces-ext-magit-tab-name-function)))
@@ -311,22 +317,41 @@ Fixes tabspaces bug where placeholder tabs aren't automatically cleaned up."
           (tab-bar-close-tab-by-name tab-name))))))
 
 (defun tabspaces-ext-magit--save-session-advice (orig-fun &rest args)
-  "Preserve window layout during tabspaces session save.
-This uses window-state-plus to avoid layout corruption with side windows."
+  "Clean stale mappings and preserve window layout during session save."
+  (tabspaces-ext-magit--clean-non-git-mappings)
   (window-state-plus-advice-save-session orig-fun args))
 
+(defun tabspaces-ext-magit--save-project-session-advice (&rest _)
+  "Clean stale mappings before per-project session save."
+  (tabspaces-ext-magit--clean-non-git-mappings))
+
+(defun tabspaces-ext-magit--clean-non-git-mappings ()
+  "Remove project@branch entries from `tabspaces-project-tab-map' for non-git dirs."
+  (when (boundp 'tabspaces-project-tab-map)
+    (setq tabspaces-project-tab-map
+          (cl-remove-if
+           (lambda (entry)
+             (and (string-match-p "@" (cdr entry))
+                  (not (file-exists-p
+                        (expand-file-name
+                         ".git" (expand-file-name (car entry)))))))
+           tabspaces-project-tab-map))))
+
 (defun tabspaces-ext-magit--repair-project-tab-mappings ()
-  "Re-populate missing `tabspaces-project-tab-map' entries for existing tabs.
+  "Repair `tabspaces-project-tab-map' after session restore.
+Two passes:
+1. Remove stale project@branch mappings whose project root has no .git.
+2. Re-populate missing mappings for existing project@branch tabs.
 The magit advice on `tabspaces-generate-descriptive-tab-name' is bypassed
 during session restore (placeholder buffer check), so project@branch tabs
 restored from the global session file lose their mapping.  Without a mapping,
 `tabspaces-save-all-project-sessions' treats them as non-project tabs,
-perpetuating the loss across restarts.
-This function scans the known project list to find matching roots and
-restores the missing entries."
+perpetuating the loss across restarts."
   (when (and (boundp 'tabspaces-project-tab-map)
              (boundp 'project--list)
              (fboundp 'magit-toplevel))
+    (tabspaces-ext-magit--clean-non-git-mappings)
+    ;; Add missing mappings for git project tabs
     (let ((tab-names (tabspaces-ext--get-all-tab-names))
           (mapped-tabs (mapcar #'cdr tabspaces-project-tab-map)))
       (dolist (tab-name tab-names)
@@ -335,7 +360,8 @@ restores the missing entries."
           (catch 'found
             (dolist (project-entry project--list)
               (let ((project-root (expand-file-name (car project-entry))))
-                (when (file-directory-p project-root)
+                (when (and (file-directory-p project-root)
+                           (file-exists-p (expand-file-name ".git" project-root)))
                   (let ((default-directory project-root))
                     (when (condition-case nil (magit-toplevel) (error nil))
                       (let ((expected (funcall tabspaces-ext-magit-tab-name-function)))
@@ -379,6 +405,10 @@ Magit doesn't need custom buffer kinds, so this is a no-op for consistency."
                 #'tabspaces-ext-magit--generate-descriptive-tab-name-advice)
     (advice-add 'tabspaces-save-session :around
                 #'tabspaces-ext-magit--save-session-advice)
+    (advice-add 'tabspaces-save-all-project-sessions :before
+                #'tabspaces-ext-magit--save-project-session-advice)
+    (advice-add 'tabspaces-save-current-project-session :before
+                #'tabspaces-ext-magit--save-project-session-advice)
     (advice-add 'tabspaces-restore-session :after
                 #'tabspaces-ext-magit--restore-session-advice)
     (setq tabspaces-ext-magit--active t)
@@ -400,6 +430,10 @@ Magit doesn't need custom buffer kinds, so this is a no-op for consistency."
                    #'tabspaces-ext-magit--generate-descriptive-tab-name-advice)
     (advice-remove 'tabspaces-save-session
                    #'tabspaces-ext-magit--save-session-advice)
+    (advice-remove 'tabspaces-save-all-project-sessions
+                   #'tabspaces-ext-magit--save-project-session-advice)
+    (advice-remove 'tabspaces-save-current-project-session
+                   #'tabspaces-ext-magit--save-project-session-advice)
     (advice-remove 'tabspaces-restore-session
                    #'tabspaces-ext-magit--restore-session-advice)
     (setq tabspaces-ext-magit--active nil)))
