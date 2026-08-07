@@ -309,6 +309,75 @@
         (tabspaces-ext-cleanup-sessions)
         (should (file-exists-p session-file))))))
 
+;;; Tests for --branch-rename-advice
+
+(ert-deftest tabspaces-ext-magit-test/branch-rename-updates-tab-and-mapping ()
+  "Renaming a branch should rename the tab and update the mapping."
+  (let* ((tabspaces-project-tab-map
+          (list (cons "/path/to/repo/" "myproject@old-feature")))
+         (renamed-to nil))
+    (cl-letf (((symbol-function 'tabspaces-ext-magit--get-git-project-name)
+               (lambda () "myproject"))
+              ((symbol-function 'tabspaces-ext--get-all-tab-names)
+               (lambda () '("myproject@old-feature")))
+              ((symbol-function 'tabspaces-ext--find-tab-index)
+               (lambda (_name) 0))
+              ((symbol-function 'tab-bar-rename-tab)
+               (lambda (name &rest _) (setq renamed-to name))))
+      (tabspaces-ext-magit--branch-rename-advice
+       (lambda (_old _new &optional _force) nil)
+       "old-feature" "new-feature")
+      (should (string= renamed-to "myproject@new-feature"))
+      (should (string= (cdar tabspaces-project-tab-map)
+                       "myproject@new-feature")))))
+
+(ert-deftest tabspaces-ext-magit-test/branch-rename-no-op-when-no-matching-tab ()
+  "Renaming a branch with no matching tab should not rename anything."
+  (let* ((tabspaces-project-tab-map
+          (list (cons "/path/to/repo/" "myproject@main")))
+         (renamed nil))
+    (cl-letf (((symbol-function 'tabspaces-ext-magit--get-git-project-name)
+               (lambda () "myproject"))
+              ((symbol-function 'tabspaces-ext--get-all-tab-names)
+               (lambda () '("myproject@main")))
+              ((symbol-function 'tab-bar-rename-tab)
+               (lambda (&rest _) (setq renamed t))))
+      (tabspaces-ext-magit--branch-rename-advice
+       (lambda (_old _new &optional _force) nil)
+       "other-branch" "renamed-branch")
+      (should-not renamed)
+      (should (string= (cdar tabspaces-project-tab-map)
+                       "myproject@main")))))
+
+(ert-deftest tabspaces-ext-magit-test/branch-rename-no-op-without-project-name ()
+  "Should not fail when project name cannot be determined."
+  (let* ((tabspaces-project-tab-map nil)
+         (renamed nil))
+    (cl-letf (((symbol-function 'tabspaces-ext-magit--get-git-project-name)
+               (lambda () nil))
+              ((symbol-function 'tab-bar-rename-tab)
+               (lambda (&rest _) (setq renamed t))))
+      (tabspaces-ext-magit--branch-rename-advice
+       (lambda (_old _new &optional _force) nil)
+       "old" "new")
+      (should-not renamed))))
+
+(ert-deftest tabspaces-ext-magit-test/branch-rename-calls-orig-fun ()
+  "Should always call the original function."
+  (let* ((orig-called nil)
+         (orig-args nil))
+    (cl-letf (((symbol-function 'tabspaces-ext-magit--get-git-project-name)
+               (lambda () "myproject"))
+              ((symbol-function 'tabspaces-ext--get-all-tab-names)
+               (lambda () nil)))
+      (tabspaces-ext-magit--branch-rename-advice
+       (lambda (old new &optional force)
+         (setq orig-called t
+               orig-args (list old new force)))
+       "old-branch" "new-branch" t)
+      (should orig-called)
+      (should (equal orig-args '("old-branch" "new-branch" t))))))
+
 (provide 'tabspaces-ext-magit-test)
 
 ;;; tabspaces-ext-magit-test.el ends here

@@ -238,6 +238,22 @@ This is advice for `magit-worktree-status'."
           (add-hook 'magit-post-display-buffer-hook
                     #'tabspaces-ext-magit--worktree-ensure-tabspace))))))
 
+(defun tabspaces-ext-magit--branch-rename-advice (orig-fun old new &optional force)
+  "Update tab name and project mapping after renaming a branch.
+This is advice for `magit-branch-rename'."
+  (let* ((project-name (tabspaces-ext-magit--get-git-project-name))
+         (old-tab-name (when project-name (format "%s@%s" project-name old))))
+    (funcall orig-fun old new force)
+    (when (and old-tab-name
+               (member old-tab-name (tabspaces-ext--get-all-tab-names)))
+      (let ((new-tab-name (format "%s@%s" project-name new)))
+        (let ((tab-index (tabspaces-ext--find-tab-index old-tab-name)))
+          (when tab-index
+            (tab-bar-rename-tab new-tab-name (1+ tab-index))))
+        (let ((mapping (rassoc old-tab-name tabspaces-project-tab-map)))
+          (when mapping
+            (setcdr mapping new-tab-name)))))))
+
 (defun tabspaces-ext-magit--worktree-delete-advice (orig-fun &rest args)
   "Delete worktree and clean up associated tab and buffers.
 This is advice for `magit-worktree-delete'.
@@ -400,6 +416,7 @@ Magit doesn't need custom buffer kinds, so this is a no-op for consistency."
     (add-hook 'magit-post-display-buffer-hook #'tabspaces-ext-magit--worktree-ensure-tabspace)
     (advice-add 'magit-worktree-status :around #'tabspaces-ext-magit--worktree-status-advice)
     (advice-add 'magit-worktree-delete :around #'tabspaces-ext-magit--worktree-delete-advice)
+    (advice-add 'magit-branch-rename :around #'tabspaces-ext-magit--branch-rename-advice)
     ;; Tabspaces integration
     (advice-add 'tabspaces-generate-descriptive-tab-name :around
                 #'tabspaces-ext-magit--generate-descriptive-tab-name-advice)
@@ -425,6 +442,7 @@ Magit doesn't need custom buffer kinds, so this is a no-op for consistency."
     (remove-hook 'magit-post-display-buffer-hook #'tabspaces-ext-magit--worktree-ensure-tabspace)
     (advice-remove 'magit-worktree-status #'tabspaces-ext-magit--worktree-status-advice)
     (advice-remove 'magit-worktree-delete #'tabspaces-ext-magit--worktree-delete-advice)
+    (advice-remove 'magit-branch-rename #'tabspaces-ext-magit--branch-rename-advice)
     ;; Tabspaces integration
     (advice-remove 'tabspaces-generate-descriptive-tab-name
                    #'tabspaces-ext-magit--generate-descriptive-tab-name-advice)
