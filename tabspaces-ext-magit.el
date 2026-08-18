@@ -197,7 +197,12 @@ Optional WORKTREE-PATH for worktree-specific branch detection."
           ;; Create new tab
           (tab-bar-new-tab)
           (tab-bar-rename-tab expected-tab-name)
-          (tabspaces-ext--add-project-tab-mapping project-root expected-tab-name))
+          (tabspaces-ext--add-project-tab-mapping project-root expected-tab-name)
+          ;; Show the magit buffer in the new tab.  Previously this relied on
+          ;; `tab-bar-new-tab' cloning the current buffer; with
+          ;; `tab-bar-new-tab-choice' set to "*scratch*" the new tab would
+          ;; otherwise land on *scratch* instead of the worktree status.
+          (switch-to-buffer magit-buffer))
         (setq-local project-current-directory project-root)))))
 
 (defun tabspaces-ext-magit--worktree-status-advice (orig-fun worktree)

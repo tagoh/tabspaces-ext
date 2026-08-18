@@ -232,6 +232,70 @@
           (tabspaces-ext-magit--worktree-ensure-tabspace))
         (should new-tab-created)))))
 
+(ert-deftest tabspaces-ext-magit-test/ensure-tabspace-selects-magit-buffer-in-new-tab ()
+  "Creating a new worktree tab should select the magit buffer.
+Guards against the regression where `tab-bar-new-tab-choice' set to
+\"*scratch*\" leaves the new tab on *scratch* instead of the worktree
+status buffer."
+  (with-temp-project-dir dir
+    (with-temp-buffer
+      (let ((magit-buffer (current-buffer))
+            (selected-buffer nil)
+            (tabspaces-project-tab-map nil)
+            (default-directory dir))
+        (cl-letf (((symbol-function 'derived-mode-p)
+                   (lambda (&rest _modes) t))
+                  ((symbol-function 'tabspaces-ext--get-current-tab-name)
+                   (lambda () "Default"))
+                  ((symbol-value 'tabspaces-ext-magit-tab-name-function)
+                   (lambda (&optional _wt) "myproject@main"))
+                  ((symbol-function 'tabspaces-ext--get-all-tab-names)
+                   (lambda () '("Default")))
+                  ((symbol-function 'tab-bar-new-tab)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'tab-bar-rename-tab)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'switch-to-buffer)
+                   (lambda (buf &rest _) (setq selected-buffer buf))))
+          (tabspaces-ext-magit--worktree-ensure-tabspace)
+          (should (eq selected-buffer magit-buffer)))))))
+
+(ert-deftest tabspaces-ext-magit-test/ensure-tabspace-non-vcs-target ()
+  "Creating a tab for a non-VCS target uses the plain directory name.
+Exercises the real name-resolution fallback (no stubbed tab-name
+function): no remote, no branch, no .git, so the tab name has no
+@branch and the magit buffer is still selected."
+  (with-temp-project-dir dir
+    (with-temp-buffer
+      (let ((magit-buffer (current-buffer))
+            (selected-buffer nil)
+            (renamed-name nil)
+            (tabspaces-project-tab-map nil)
+            (default-directory dir))
+        (cl-letf (((symbol-function 'derived-mode-p)
+                   (lambda (&rest _modes) t))
+                  ((symbol-function 'tabspaces-ext--get-current-tab-name)
+                   (lambda () "Default"))
+                  ((symbol-function 'tabspaces-ext--get-all-tab-names)
+                   (lambda () '("Default")))
+                  ;; Real magit lookups all fail for a non-VCS dir.
+                  ((symbol-function 'magit-get) (lambda (&rest _) nil))
+                  ((symbol-function 'magit-gitdir) (lambda () nil))
+                  ((symbol-function 'magit-get-current-branch) (lambda () nil))
+                  ((symbol-function 'tab-bar-new-tab) (lambda (&rest _) nil))
+                  ((symbol-function 'tab-bar-rename-tab)
+                   (lambda (name &rest _) (setq renamed-name name)))
+                  ((symbol-function 'switch-to-buffer)
+                   (lambda (buf &rest _) (setq selected-buffer buf))))
+          (tabspaces-ext-magit--worktree-ensure-tabspace)
+          ;; Tab named after the directory, with no @branch suffix.
+          (should (string= renamed-name
+                           (file-name-nondirectory (directory-file-name dir))))
+          (should-not (string-match-p "@" renamed-name))
+          ;; Mapping recorded and magit buffer selected despite no VCS.
+          (should (= 1 (length tabspaces-project-tab-map)))
+          (should (eq selected-buffer magit-buffer)))))))
+
 ;;; Tests for --clean-non-git-mappings
 
 (ert-deftest tabspaces-ext-magit-test/clean-removes-non-git-at-mappings ()
@@ -377,6 +441,132 @@
        "old-branch" "new-branch" t)
       (should orig-called)
       (should (equal orig-args '("old-branch" "new-branch" t))))))
+
+;;; Tests for tabspaces-ext--is-system-buffer-p
+
+(ert-deftest tabspaces-ext-magit-test/is-system-buffer-scratch ()
+  "*scratch* is treated as a system buffer."
+  (should (tabspaces-ext--is-system-buffer-p "*scratch*")))
+
+(ert-deftest tabspaces-ext-magit-test/is-system-buffer-messages ()
+  "*Messages* is treated as a system buffer."
+  (should (tabspaces-ext--is-system-buffer-p "*Messages*")))
+
+(ert-deftest tabspaces-ext-magit-test/is-system-buffer-minibuffer ()
+  "Minibuffer buffers are treated as system buffers."
+  (should (tabspaces-ext--is-system-buffer-p " *Minibuf-0*")))
+
+(ert-deftest tabspaces-ext-magit-test/is-system-buffer-regular-file ()
+  "Regular file buffers are not system buffers."
+  (should-not (tabspaces-ext--is-system-buffer-p "foo.el")))
+
+(ert-deftest tabspaces-ext-magit-test/is-system-buffer-other-starred ()
+  "Non-listed starred buffers are not system buffers."
+  (should-not (tabspaces-ext--is-system-buffer-p "*Compile-Log*")))
+
+;;; Tests for tabspaces-ext--add-project-tab-mapping
+
+(ert-deftest tabspaces-ext-magit-test/add-mapping-adds-new ()
+  "Adding to an empty map creates the mapping."
+  (let ((tabspaces-project-tab-map nil))
+    (tabspaces-ext--add-project-tab-mapping "/a/" "proj@main")
+    (should (equal tabspaces-project-tab-map '(("/a/" . "proj@main"))))))
+
+(ert-deftest tabspaces-ext-magit-test/add-mapping-no-duplicate-same-name ()
+  "Re-adding the same root and name does not duplicate."
+  (let ((tabspaces-project-tab-map (list (cons "/a/" "proj@main"))))
+    (tabspaces-ext--add-project-tab-mapping "/a/" "proj@main")
+    (should (= 1 (length tabspaces-project-tab-map)))
+    (should (string= (cdar tabspaces-project-tab-map) "proj@main"))))
+
+(ert-deftest tabspaces-ext-magit-test/add-mapping-updates-existing-root ()
+  "Adding an existing root with a new name updates it in place."
+  (let ((tabspaces-project-tab-map (list (cons "/a/" "proj@main"))))
+    (tabspaces-ext--add-project-tab-mapping "/a/" "proj@feature")
+    (should (= 1 (length tabspaces-project-tab-map)))
+    (should (string= (cdr (assoc "/a/" tabspaces-project-tab-map))
+                     "proj@feature"))))
+
+(ert-deftest tabspaces-ext-magit-test/add-mapping-removes-stale-reverse-dup ()
+  "Adding a new root reusing an existing tab name removes the old root."
+  (let ((tabspaces-project-tab-map
+         (list (cons "/a/" "shared") (cons "/b/" "other"))))
+    (tabspaces-ext--add-project-tab-mapping "/c/" "shared")
+    (should (= 2 (length tabspaces-project-tab-map)))
+    (should (string= (cdr (assoc "/c/" tabspaces-project-tab-map)) "shared"))
+    (should-not (assoc "/a/" tabspaces-project-tab-map))
+    (should (assoc "/b/" tabspaces-project-tab-map))))
+
+;;; Tests for --get-git-project-name
+
+(ert-deftest tabspaces-ext-magit-test/git-project-name-from-ssh-url ()
+  "Extracts project name from an SSH remote URL with .git suffix."
+  (cl-letf (((symbol-function 'magit-get)
+             (lambda (&rest _) "git@github.com:user/project.git")))
+    (should (string= (tabspaces-ext-magit--get-git-project-name) "project"))))
+
+(ert-deftest tabspaces-ext-magit-test/git-project-name-from-ssh-url-no-suffix ()
+  "Extracts project name from an SSH remote URL without .git suffix."
+  (cl-letf (((symbol-function 'magit-get)
+             (lambda (&rest _) "git@github.com:user/project")))
+    (should (string= (tabspaces-ext-magit--get-git-project-name) "project"))))
+
+(ert-deftest tabspaces-ext-magit-test/git-project-name-from-https-url ()
+  "Extracts project name from an HTTPS remote URL."
+  (cl-letf (((symbol-function 'magit-get)
+             (lambda (&rest _) "https://github.com/user/project.git")))
+    (should (string= (tabspaces-ext-magit--get-git-project-name) "project"))))
+
+(ert-deftest tabspaces-ext-magit-test/git-project-name-falls-back-to-gitdir ()
+  "Falls back to the repository directory name when there is no remote."
+  (cl-letf (((symbol-function 'magit-get) (lambda (&rest _) nil))
+            ((symbol-function 'magit-gitdir) (lambda () "/tmp/myrepo/.git/")))
+    (should (string= (tabspaces-ext-magit--get-git-project-name) "myrepo"))))
+
+;;; Tests for --get-git-branch-name
+
+(ert-deftest tabspaces-ext-magit-test/git-branch-name-normal ()
+  "Returns the current branch name when magit reports one."
+  (cl-letf (((symbol-function 'magit-get-current-branch) (lambda () "main")))
+    (should (string= (tabspaces-ext-magit--get-git-branch-name) "main"))))
+
+(ert-deftest tabspaces-ext-magit-test/git-branch-name-from-worktree-dir ()
+  "Infers the branch from a worktree directory name when detached."
+  (with-temp-project-dir dir
+    (let ((wt (file-name-as-directory (expand-file-name "main_feature-x" dir))))
+      (cl-letf (((symbol-function 'magit-get-current-branch) (lambda () nil)))
+        (should (string= (tabspaces-ext-magit--get-git-branch-name wt)
+                         "feature-x"))))))
+
+;;; Tests for tabspaces-ext-magit-default-tab-name
+
+(ert-deftest tabspaces-ext-magit-test/default-tab-name-project-and-branch ()
+  "Combines project and branch into project@branch."
+  (cl-letf (((symbol-function 'tabspaces-ext-magit--get-git-project-name)
+             (lambda () "proj"))
+            ((symbol-function 'tabspaces-ext-magit--get-git-branch-name)
+             (lambda (&optional _wt) "main")))
+    (should (string= (tabspaces-ext-magit-default-tab-name) "proj@main"))))
+
+(ert-deftest tabspaces-ext-magit-test/default-tab-name-project-only ()
+  "Falls back to the project name when no branch is available."
+  (cl-letf (((symbol-function 'tabspaces-ext-magit--get-git-project-name)
+             (lambda () "proj"))
+            ((symbol-function 'tabspaces-ext-magit--get-git-branch-name)
+             (lambda (&optional _wt) nil)))
+    (should (string= (tabspaces-ext-magit-default-tab-name) "proj"))))
+
+(ert-deftest tabspaces-ext-magit-test/default-tab-name-falls-back-to-dir ()
+  "Falls back to the directory name when neither project nor branch is known."
+  (with-temp-project-dir dir
+    (cl-letf (((symbol-function 'tabspaces-ext-magit--get-git-project-name)
+               (lambda () nil))
+              ((symbol-function 'tabspaces-ext-magit--get-git-branch-name)
+               (lambda (&optional _wt) nil)))
+      (let ((default-directory dir))
+        (should (string= (tabspaces-ext-magit-default-tab-name)
+                         (file-name-nondirectory
+                          (directory-file-name dir))))))))
 
 (provide 'tabspaces-ext-magit-test)
 
