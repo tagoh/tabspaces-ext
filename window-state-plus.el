@@ -186,6 +186,12 @@ Returns list of deleted side window states for restoration."
 
 ;;; Public API
 
+(defconst window-state-plus--wrapper-tag 'window-state-plus--v1
+  "Head symbol marking a state wrapped by `window-state-plus-get'.
+Distinguishes a (TAG :main STATE :side-windows LIST) wrapper from a raw
+`window-state-get' value, so `window-state-plus-put' can accept both
+without misparsing the non-plist window-state structure.")
+
 ;;;###autoload
 (defun window-state-plus-get (&optional window writable)
   "Get window state of WINDOW, properly handling side windows.
@@ -196,12 +202,17 @@ WINDOW defaults to the selected window.
 WRITABLE is passed to the underlying `window-state-get'."
   (let* ((window (or window (selected-window)))
          (side-window-states (when window-state-plus-preserve-side-windows
-                              (window-state-plus--get-side-window-state)))
+                               (window-state-plus--get-side-window-state)))
          (main-state (window-state-get window writable)))
-    ;; Store side window info in the state
-    (when side-window-states
-      (setq main-state (plist-put main-state :side-windows side-window-states)))
-    main-state))
+    ;; A `window-state-get' value is not a plist (with WRITABLE its car is
+    ;; an alist of size constraints), so side window info cannot be stored
+    ;; inside it via `plist-put' -- that signals `wrong-type-argument
+    ;; plistp' on Emacs 28+.  Wrap both pieces in a tagged container.
+    (if side-window-states
+        (list window-state-plus--wrapper-tag
+              :main main-state
+              :side-windows side-window-states)
+      main-state)))
 
 ;;;###autoload
 (defun window-state-plus-put (state &optional window ignore)
@@ -211,14 +222,11 @@ restores side windows like popterm and treemacs.
 
 WINDOW defaults to the selected window.
 IGNORE is passed to the underlying `window-state-put'."
-  (let ((window (or window (selected-window)))
-        (side-window-states (plist-get state :side-windows))
-        (main-state (copy-sequence state)))
-
-    ;; Remove side windows info from main state before restoration
-    (when side-window-states
-      (setq main-state (cl-copy-list main-state))
-      (setq main-state (plist-put main-state :side-windows nil)))
+  (let* ((window (or window (selected-window)))
+         (wrapped (and (consp state)
+                       (eq (car state) window-state-plus--wrapper-tag)))
+         (main-state (if wrapped (plist-get (cdr state) :main) state))
+         (side-window-states (and wrapped (plist-get (cdr state) :side-windows))))
 
     ;; Delete existing side windows first to avoid conflicts
     (when window-state-plus-preserve-side-windows

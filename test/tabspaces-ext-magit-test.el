@@ -442,6 +442,24 @@ function): no remote, no branch, no .git, so the tab name has no
       (should orig-called)
       (should (equal orig-args '("old-branch" "new-branch" t))))))
 
+;;; Tests for --save-session-advice
+
+(ert-deftest tabspaces-ext-magit-test/save-session-advice-forwards-args ()
+  "Advice must forward orig-fun to the layout wrapper via `apply', not pass
+the `&rest' list as a single argument.  Regression: the buggy form called
+the zero-arg `tabspaces-save-session' with a spurious nil, signalling
+`wrong-number-of-arguments'."
+  (let ((received 'unset))
+    (cl-letf (((symbol-function 'window-state-plus-advice-save-session)
+               (lambda (fn &rest args) (setq received (cons fn args))))
+              ((symbol-function 'tabspaces-ext-magit--clean-non-git-mappings)
+               (lambda () nil)))
+      (let ((orig (lambda () 'ok)))
+        (tabspaces-ext-magit--save-session-advice orig)
+        ;; orig-fun forwarded as the first arg, with NO extra args appended.
+        (should (eq (car received) orig))
+        (should (null (cdr received)))))))
+
 ;;; Tests for tabspaces-ext--is-system-buffer-p
 
 (ert-deftest tabspaces-ext-magit-test/is-system-buffer-scratch ()

@@ -340,7 +340,7 @@ Fixes tabspaces bug where placeholder tabs aren't automatically cleaned up."
 (defun tabspaces-ext-magit--save-session-advice (orig-fun &rest args)
   "Clean stale mappings and preserve window layout during session save."
   (tabspaces-ext-magit--clean-non-git-mappings)
-  (window-state-plus-advice-save-session orig-fun args))
+  (apply #'window-state-plus-advice-save-session orig-fun args))
 
 (defun tabspaces-ext-magit--save-project-session-advice (&rest _)
   "Clean stale mappings before per-project session save."
