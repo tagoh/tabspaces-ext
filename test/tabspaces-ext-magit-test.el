@@ -460,6 +460,44 @@ the zero-arg `tabspaces-save-session' with a spurious nil, signalling
         (should (eq (car received) orig))
         (should (null (cdr received)))))))
 
+;;; Tests for --register-buffer-kind (magit-status persistence)
+
+(defun tabspaces-ext-magit-test--capture-buffer-kind ()
+  "Call the magit register function and return (KIND SAVE-FN RESTORE-FN)."
+  (let (captured)
+    (cl-letf (((symbol-function 'tabspaces-register-buffer-kind)
+               (lambda (kind save restore)
+                 (setq captured (list kind save restore)))))
+      (tabspaces-ext-magit-register-buffer-kind))
+    captured))
+
+(ert-deftest tabspaces-ext-magit-test/buffer-kind-saves-status-dir ()
+  "The save-fn records :kind and :dir for a magit-status buffer."
+  (with-temp-project-dir dir
+    (cl-destructuring-bind (kind save-fn _restore)
+        (tabspaces-ext-magit-test--capture-buffer-kind)
+      (should (eq kind 'magit-status))
+      (with-temp-buffer
+        (setq default-directory dir)
+        (setq major-mode 'magit-status-mode)
+        (let ((rec (funcall save-fn (current-buffer))))
+          (should (eq (plist-get rec :kind) 'magit-status))
+          (should (string= (plist-get rec :dir) dir)))))))
+
+(ert-deftest tabspaces-ext-magit-test/buffer-kind-skips-non-magit ()
+  "The save-fn returns nil for a non-magit buffer."
+  (let ((save-fn (nth 1 (tabspaces-ext-magit-test--capture-buffer-kind))))
+    (with-temp-buffer
+      (setq major-mode 'fundamental-mode)
+      (should-not (funcall save-fn (current-buffer))))))
+
+(ert-deftest tabspaces-ext-magit-test/buffer-kind-restore-guards ()
+  "The restore-fn returns nil (no error) when :dir is missing or magit is
+unavailable, rather than signalling."
+  (let ((restore-fn (nth 2 (tabspaces-ext-magit-test--capture-buffer-kind))))
+    (should-not (funcall restore-fn '(:kind magit-status)))
+    (should-not (funcall restore-fn (list :kind 'magit-status :dir "/tmp/")))))
+
 ;;; Tests for tabspaces-ext--is-system-buffer-p
 
 (ert-deftest tabspaces-ext-magit-test/is-system-buffer-scratch ()

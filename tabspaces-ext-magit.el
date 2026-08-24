@@ -406,10 +406,30 @@ perpetuating the loss across restarts."
 
 ;;;###autoload
 (defun tabspaces-ext-magit-register-buffer-kind ()
-  "Register buffer kinds for magit integration.
-Magit doesn't need custom buffer kinds, so this is a no-op for consistency."
-  ;; No-op: magit buffers don't need special session restoration
-  nil)
+  "Register the magit-status buffer kind for session restoration.
+This function is called early during tabspaces-ext initialization,
+before magit is loaded, to support session restoration.
+
+Without a handler, magit-status buffers (no file, no restore-fn) are
+dropped from the session on save, leaving an unrestorable window on
+restore.  Persist their repository directory and rebuild the status
+buffer from it via `magit-status-setup-buffer'."
+  (tabspaces-register-buffer-kind
+   'magit-status
+   (lambda (b)
+     (when (eq (buffer-local-value 'major-mode b) 'magit-status-mode)
+       (list :kind 'magit-status
+             :dir (buffer-local-value 'default-directory b))))
+   (lambda (rec)
+     (when-let ((dir (plist-get rec :dir)))
+       (when (and (featurep 'magit)
+                  (fboundp 'magit-status-setup-buffer)
+                  (file-directory-p dir))
+         ;; Rebuild without stealing the window; tabspaces restores the
+         ;; layout afterwards via `window-state-put'.
+         (save-window-excursion
+           (let ((default-directory dir))
+             (ignore-errors (magit-status-setup-buffer dir)))))))))
 
 ;;;###autoload
 (defun tabspaces-ext-magit-setup ()
