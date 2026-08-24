@@ -214,12 +214,17 @@ before popterm is loaded, to support session restoration."
 ;;; Layout fixes
 
 (defun tabspaces-ext-popterm--fix-layout (&rest _)
-  "Fix popterm layout after restoration/tab switching."
+  "Reposition an already-visible popterm after restoration/tab switching.
+Does nothing when popterm is not currently displayed: the buffer often
+outlives its window, so keying off buffer existence alone would re-open a
+popterm the user has deliberately closed on every tab switch (including
+the tab cycling done by session auto-save)."
   (when-let* ((tab-name (tabspaces-ext--get-current-tab-name))
               (project-dir (tabspaces-ext-popterm--get-project-dir tab-name))
-              (popterm-buf (get-buffer (tabspaces-ext-popterm--buffer-name popterm-backend tab-name))))
+              (popterm-buf (get-buffer (tabspaces-ext-popterm--buffer-name popterm-backend tab-name)))
+              (windows (get-buffer-window-list popterm-buf nil t)))
     ;; Delete all popterm windows
-    (dolist (win (get-buffer-window-list popterm-buf nil t))
+    (dolist (win windows)
       (unless (eq win (frame-root-window))
         (ignore-errors (delete-window win))))
     ;; Recreate at bottom with correct directory
