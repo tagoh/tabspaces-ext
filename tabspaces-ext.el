@@ -129,6 +129,43 @@ When non-nil, creates separate popterm instances per tab."
   :type 'boolean
   :group 'tabspaces-ext)
 
+(defcustom tabspaces-ext-shared-buffers nil
+  "Matchers for buffers that must never be saved into any session.
+Some buffers are global by nature -- e.g. a central org journal reached
+from any project -- and, because they live outside every project root,
+the cross-workspace leak filter cannot recognize them as foreign.  Such
+buffers otherwise leak into whatever tab happens to be current when they
+are visited, and are then persisted into that tab's session file.
+
+Each element is a matcher applied to a session buffer record (a file
+path string or a plist with `:dir'/`:name'):
+
+  - a string   -- matched as a regexp against the record's file path
+                  and against its directory;
+  - a function -- called with the record, non-nil means \"shared\".
+
+Records matching any element are dropped from every session save,
+regardless of which tab is being saved."
+  :type '(repeat (choice (regexp :tag "Path regexp")
+                         (function :tag "Predicate")))
+  :group 'tabspaces-ext)
+
+(defcustom tabspaces-ext-project-directory-commands nil
+  "Commands whose `default-directory' is pinned to the tab's project root.
+Direction-sensitive commands resolve `default-directory' from whatever
+buffer happens to be current.  When a global buffer -- e.g. a central org
+journal reached from any project -- is current in a project tab, such a
+command would run against that buffer's directory instead of the tab's
+project.  Each command listed here is advised so that, while it runs in a
+project tab, `default-directory' is bound to that tab's mapped project
+root instead.  On the `Default' tab or any tab with no mapped project the
+command sees the ambient `default-directory' unchanged.
+
+Takes effect when `tabspaces-ext-mode' is enabled; changing it while the
+mode is on requires toggling the mode to re-install the advice."
+  :type '(repeat function)
+  :group 'tabspaces-ext)
+
 ;;; Helper functions
 
 (defun tabspaces-ext--add-project-tab-mapping (project-root tab-name)
@@ -204,6 +241,27 @@ REC is either a file path string (legacy format) or a plist with `:dir'."
    ((stringp rec) (file-name-directory rec))
    ((consp rec) (plist-get rec :dir))))
 
+(defun tabspaces-ext--record-file (rec)
+  "Return the file path of session buffer record REC, or nil.
+REC is either a file path string (legacy format) or a plist; only string
+records carry a concrete file path."
+  (when (stringp rec) rec))
+
+(defun tabspaces-ext--shared-record-p (rec)
+  "Return non-nil if REC matches any `tabspaces-ext-shared-buffers' matcher.
+String matchers are treated as regexps tested against the record's file
+path and its directory; function matchers are called with REC directly."
+  (let ((file (tabspaces-ext--record-file rec))
+        (dir (tabspaces-ext--record-directory rec)))
+    (cl-some
+     (lambda (matcher)
+       (cond
+        ((functionp matcher) (funcall matcher rec))
+        ((stringp matcher)
+         (or (and file (string-match-p matcher file))
+             (and dir (string-match-p matcher dir))))))
+     tabspaces-ext-shared-buffers)))
+
 (defun tabspaces-ext--foreign-record-p (rec tab-root)
   "Return non-nil if REC belongs to a project other than TAB-ROOT.
 A record is foreign when its directory lies under some project root in
@@ -224,18 +282,61 @@ directory, records under TAB-ROOT, and records under no known project
                 tabspaces-project-tab-map)))))))
 
 (defun tabspaces-ext--filter-foreign-buffers (records)
-  "Remove RECORDS that belong to another project's workspace.
-Advice (`:filter-return') for `tabspaces--store-buffers'.  The current
-tab during a save is the tab being saved, so its mapped project root
-determines what counts as foreign.  Non-project tabs (no mapped root)
-keep every record."
-  (let ((tab-root (tabspaces-ext--tab-project-root
+  "Remove RECORDS that must not be persisted into a session.
+Advice (`:filter-return') for `tabspaces--store-buffers'.  Runs two
+passes:
+
+  1. Drop shared buffers (`tabspaces-ext-shared-buffers') unconditionally,
+     so a global buffer like a central org journal never lands in any
+     session file, whatever tab is being saved.
+  2. Drop foreign buffers -- records under another mapped project root --
+     but only when the tab being saved maps to a project.  The current
+     tab during a save is the tab being saved, so its mapped root
+     determines what counts as foreign.  Non-project tabs (no mapped
+     root) keep every remaining record."
+  (let ((records (if tabspaces-ext-shared-buffers
+                     (cl-remove-if #'tabspaces-ext--shared-record-p records)
+                   records))
+        (tab-root (tabspaces-ext--tab-project-root
                    (tabspaces-ext--get-current-tab-name))))
     (if tab-root
         (cl-remove-if (lambda (rec)
                         (tabspaces-ext--foreign-record-p rec tab-root))
                       records)
       records)))
+
+;;; Project-directory pinning for direction-sensitive commands
+
+(defun tabspaces-ext-current-project-root ()
+  "Return the project root mapped to the current tab, or nil.
+Nil for the `Default' tab or any tab with no mapped project."
+  (tabspaces-ext--tab-project-root (tabspaces-ext--get-current-tab-name)))
+
+(defun tabspaces-ext--with-project-directory (orig-fn &rest args)
+  "Call ORIG-FN with `default-directory' pinned to the tab's project root.
+Advice (`:around') for the commands in
+`tabspaces-ext-project-directory-commands'.  When the current tab maps to
+a project, ORIG-FN runs with `default-directory' bound to that root so it
+ignores whichever buffer -- e.g. a global org journal -- happens to be
+current.  Off a project tab the ambient `default-directory' is used."
+  (let* ((root (tabspaces-ext-current-project-root))
+         (default-directory (if root
+                                (file-name-as-directory (expand-file-name root))
+                              default-directory)))
+    (apply orig-fn args)))
+
+(defun tabspaces-ext--install-project-directory-advice ()
+  "Advise every command in `tabspaces-ext-project-directory-commands'."
+  (dolist (cmd tabspaces-ext-project-directory-commands)
+    (advice-add cmd :around #'tabspaces-ext--with-project-directory)))
+
+(defun tabspaces-ext--remove-project-directory-advice ()
+  "Remove project-directory advice from all commands that carry it.
+Iterates the configured list; a stale list still cannot leave advice on a
+command that was removed from it, but toggling the mode is the supported
+way to pick up list changes."
+  (dolist (cmd tabspaces-ext-project-directory-commands)
+    (advice-remove cmd #'tabspaces-ext--with-project-directory)))
 
 ;;; Buffer cleanup on tab close
 
@@ -416,11 +517,14 @@ When enabled, provides:
         ;; from other workspaces.
         (advice-add 'tabspaces--store-buffers :filter-return
                     #'tabspaces-ext--filter-foreign-buffers)
+        ;; Pin direction-sensitive commands to the tab's project root.
+        (tabspaces-ext--install-project-directory-advice)
         ;; Load enabled integrations
         (tabspaces-ext--load-integrations))
     ;; Disable
     (remove-hook 'tab-bar-tab-prevent-close-functions #'tabspaces-ext--tab-close-handler)
     (advice-remove 'tabspaces--store-buffers #'tabspaces-ext--filter-foreign-buffers)
+    (tabspaces-ext--remove-project-directory-advice)
     (tabspaces-ext--unload-integrations)))
 
 (provide 'tabspaces-ext)

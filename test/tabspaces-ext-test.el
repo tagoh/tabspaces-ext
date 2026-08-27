@@ -80,6 +80,109 @@
     (should-not (tabspaces-ext--foreign-record-p '(:kind popterm) "/p/alpha/"))
     (should-not (tabspaces-ext--foreign-record-p '(:kind treemacs :dir nil) "/p/alpha/"))))
 
+;;; Tests for --shared-record-p / shared-buffer drop
+
+(ert-deftest tabspaces-ext-test/shared-record-p-matches-regexp ()
+  "A string matcher is a regexp tested against the path and the dir."
+  (let ((tabspaces-ext-shared-buffers '("/org/status\\.org\\'")))
+    (should (tabspaces-ext--shared-record-p "/home/me/org/status.org"))
+    (should-not (tabspaces-ext--shared-record-p "/home/me/org/other.org"))
+    (should-not (tabspaces-ext--shared-record-p "/p/alpha/status.org")))
+  ;; Directory-based match reaches plist (non-file) records too.
+  (let ((tabspaces-ext-shared-buffers '("/home/me/org/")))
+    (should (tabspaces-ext--shared-record-p '(:kind dired :dir "/home/me/org/")))
+    (should (tabspaces-ext--shared-record-p "/home/me/org/status.org"))))
+
+(ert-deftest tabspaces-ext-test/shared-record-p-matches-predicate ()
+  "A function matcher is called with the record."
+  (let ((tabspaces-ext-shared-buffers
+         (list (lambda (rec) (equal rec '(:kind foo))))))
+    (should (tabspaces-ext--shared-record-p '(:kind foo)))
+    (should-not (tabspaces-ext--shared-record-p '(:kind bar)))))
+
+(ert-deftest tabspaces-ext-test/shared-record-p-nil-without-matchers ()
+  "With no matchers configured nothing is shared."
+  (let ((tabspaces-ext-shared-buffers nil))
+    (should-not (tabspaces-ext--shared-record-p "/home/me/org/status.org"))))
+
+(ert-deftest tabspaces-ext-test/filter-drops-shared-in-project-tab ()
+  "Shared buffers are dropped even when they are a loose file kept by the
+foreign filter, in a project tab."
+  (let ((tabspaces-project-tab-map '(("/p/alpha/" . "alpha@main")))
+        (tabspaces-ext-shared-buffers '("/org/status\\.org\\'")))
+    (cl-letf (((symbol-function 'tabspaces-ext--get-current-tab-name)
+               (lambda () "alpha@main")))
+      (let* ((records (list "/p/alpha/src/foo.c"
+                            "/home/me/org/status.org"))
+             (out (tabspaces-ext--filter-foreign-buffers records)))
+        (should (member "/p/alpha/src/foo.c" out))
+        (should-not (member "/home/me/org/status.org" out))
+        (should (= 1 (length out)))))))
+
+(ert-deftest tabspaces-ext-test/filter-drops-shared-in-nonproject-tab ()
+  "Shared buffers are dropped unconditionally, even for a non-project tab
+that otherwise keeps every record."
+  (let ((tabspaces-project-tab-map '(("/p/beta/" . "beta@main")))
+        (tabspaces-ext-shared-buffers '("/org/status\\.org\\'")))
+    (cl-letf (((symbol-function 'tabspaces-ext--get-current-tab-name)
+               (lambda () "*scratch*")))
+      (let* ((records (list "/tmp/loose/y.txt" "/home/me/org/status.org"))
+             (out (tabspaces-ext--filter-foreign-buffers records)))
+        (should (member "/tmp/loose/y.txt" out))
+        (should-not (member "/home/me/org/status.org" out))
+        (should (= 1 (length out)))))))
+
+;;; Tests for project-directory pinning
+
+(defun tabspaces-ext-test--probe ()
+  "A stand-in direction-sensitive command: report `default-directory'."
+  default-directory)
+
+(ert-deftest tabspaces-ext-test/with-project-directory-pins-to-tab-root ()
+  "In a project tab the wrapped command sees the tab's project root,
+regardless of the ambient `default-directory'."
+  (let ((tabspaces-project-tab-map '(("/p/alpha/" . "alpha@main"))))
+    (cl-letf (((symbol-function 'tabspaces-ext--get-current-tab-name)
+               (lambda () "alpha@main")))
+      (let ((default-directory "/home/me/org/"))
+        (should (equal "/p/alpha/"
+                       (tabspaces-ext--with-project-directory
+                        #'tabspaces-ext-test--probe)))))))
+
+(ert-deftest tabspaces-ext-test/with-project-directory-keeps-ambient-off-project ()
+  "On a tab with no mapped project the ambient `default-directory' is kept."
+  (let ((tabspaces-project-tab-map '(("/p/alpha/" . "alpha@main"))))
+    (cl-letf (((symbol-function 'tabspaces-ext--get-current-tab-name)
+               (lambda () "Default")))
+      (let ((default-directory "/home/me/org/"))
+        (should (equal "/home/me/org/"
+                       (tabspaces-ext--with-project-directory
+                        #'tabspaces-ext-test--probe)))))))
+
+(ert-deftest tabspaces-ext-test/with-project-directory-passes-args ()
+  "ORIG-FN still receives its arguments through the wrapper."
+  (let ((tabspaces-project-tab-map nil))
+    (cl-letf (((symbol-function 'tabspaces-ext--get-current-tab-name)
+               (lambda () "Default")))
+      (should (equal '(1 2 3)
+                     (tabspaces-ext--with-project-directory #'list 1 2 3))))))
+
+(ert-deftest tabspaces-ext-test/mode-installs-and-removes-directory-advice ()
+  "Enabling the mode advises the configured commands; disabling removes it."
+  (let ((tabspaces-ext-project-directory-commands
+         '(tabspaces-ext-test--probe)))
+    (unwind-protect
+        (progn
+          (tabspaces-ext-mode 1)
+          (should (advice-member-p #'tabspaces-ext--with-project-directory
+                                   'tabspaces-ext-test--probe))
+          (tabspaces-ext-mode -1)
+          (should-not (advice-member-p #'tabspaces-ext--with-project-directory
+                                       'tabspaces-ext-test--probe)))
+      (tabspaces-ext-mode -1)
+      (advice-remove 'tabspaces-ext-test--probe
+                     #'tabspaces-ext--with-project-directory))))
+
 ;;; Integration: the mode wires the filter onto `tabspaces--store-buffers'
 
 (ert-deftest tabspaces-ext-test/mode-installs-and-removes-store-buffers-advice ()
