@@ -89,7 +89,7 @@ before treemacs is loaded, to support session restoration."
      (when (eq (buffer-local-value 'major-mode b) 'treemacs-mode)
        (list :kind 'treemacs :dir (buffer-local-value 'default-directory b))))
    (lambda (rec)
-     (when-let ((dir (plist-get rec :dir)))
+     (when-let* ((dir (plist-get rec :dir)))
        (or (tabspaces-reuse-existing-buffer " *Treemacs-Buffer-No Tab")
            (when (featurep 'treemacs)
              (save-window-excursion
@@ -107,7 +107,7 @@ Falls back to `project-current' when the tab map has no entry."
                            (car (rassoc tab-name tabspaces-project-tab-map)))))
         (if (and from-map (file-directory-p from-map))
             (expand-file-name from-map)
-          (when-let ((proj (project-current)))
+          (when-let* ((proj (project-current)))
             (expand-file-name (project-root proj))))))))
 
 (defun tabspaces-ext-treemacs--sync-with-tabspaces ()
@@ -189,7 +189,7 @@ This handles worktree switches that may not trigger tab-bar hooks."
   (interactive)
   (let* ((tab (tabspaces-ext--get-current-tab-name))
          (root-map (tabspaces-ext-treemacs--get-project-root-for-tab))
-         (root-api (when-let ((p (project-current))) (expand-file-name (project-root p))))
+         (root-api (when-let* ((p (project-current))) (expand-file-name (project-root p))))
          (workspace (treemacs-current-workspace))
          (projects (when workspace
                      (mapcar #'treemacs-project->path (treemacs-workspace->projects workspace)))))

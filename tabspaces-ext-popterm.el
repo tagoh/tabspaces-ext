@@ -118,10 +118,10 @@ before popterm is loaded, to support session restoration."
                (ignore-errors
                  (when (fboundp 'popterm--get-or-create)
                    (popterm--get-or-create tab-name backend)
-                   (when-let ((buf (get-buffer buf-name)))
+                   (when-let* ((buf (get-buffer buf-name)))
                      (with-current-buffer buf
                        (setq default-directory dir)
-                       (when-let ((proc (get-buffer-process buf)))
+                       (when-let* ((proc (get-buffer-process buf)))
                          (process-send-string proc (format "cd %s\n" (shell-quote-argument dir)))))
                      buf))))))))))
 
@@ -143,13 +143,13 @@ before popterm is loaded, to support session restoration."
       (cl-loop for buf in (mapcar #'window-buffer (window-list))
                for proj = (with-current-buffer buf (project-current nil))
                when proj return (project-root proj))
-      (when-let ((project (project-current))) (project-root project))))
+      (when-let* ((project (project-current))) (project-root project))))
 
 (defun tabspaces-ext-popterm--set-directory (buf dir)
   "Set BUF's directory to DIR and send cd command to terminal."
   (with-current-buffer buf
     (setq default-directory dir)
-    (when-let ((proc (get-buffer-process buf)))
+    (when-let* ((proc (get-buffer-process buf)))
       (process-send-string proc (format "cd %s\n" (shell-quote-argument dir))))))
 
 ;;; Buffer isolation
@@ -271,13 +271,13 @@ time, which is exactly the desired behaviour."
 (defun tabspaces-ext-popterm-toggle ()
   "Toggle popterm in window with current tab name as instance."
   (interactive)
-  (when-let ((tab-name (tabspaces-ext--get-current-tab-name)))
+  (when-let* ((tab-name (tabspaces-ext--get-current-tab-name)))
     (let* ((project-dir (tabspaces-ext-popterm--get-project-dir tab-name))
            (default-directory (or project-dir default-directory))
            (popterm-display-method 'window))
       (popterm-toggle tab-name popterm-backend)
       (when project-dir
-        (when-let ((buf (get-buffer (tabspaces-ext-popterm--buffer-name popterm-backend tab-name))))
+        (when-let* ((buf (get-buffer (tabspaces-ext-popterm--buffer-name popterm-backend tab-name))))
           (tabspaces-ext-popterm--set-directory buf project-dir))))))
 
 ;;; Setup/teardown functions

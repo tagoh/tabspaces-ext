@@ -95,7 +95,7 @@ Works for both regular repos and worktrees."
   (when (and (fboundp 'magit-get) (fboundp 'magit-gitdir))
     (or
      ;; Try to extract from remote URL
-     (when-let ((remote-url (magit-get "remote.origin.url")))
+     (when-let* ((remote-url (magit-get "remote.origin.url")))
        (cond
         ;; SSH: git@github.com:user/project.git
         ((string-match ":\\([^/]+\\)/\\([^/\\.]+\\)\\(\\.git\\)?$" remote-url)
@@ -104,7 +104,7 @@ Works for both regular repos and worktrees."
         ((string-match "/\\([^/\\.]+\\)\\(\\.git\\)?$" remote-url)
          (match-string 1 remote-url))))
      ;; Fallback to repository directory name
-     (when-let ((git-dir (magit-gitdir)))
+     (when-let* ((git-dir (magit-gitdir)))
        (file-name-nondirectory
         (directory-file-name
          (if (string-match "/\\.git/?$" git-dir)
@@ -471,7 +471,7 @@ buffer from it via `magit-status-setup-buffer'."
        (list :kind 'magit-status
              :dir (buffer-local-value 'default-directory b))))
    (lambda (rec)
-     (when-let ((dir (plist-get rec :dir)))
+     (when-let* ((dir (plist-get rec :dir)))
        (when (and (featurep 'magit)
                   (fboundp 'magit-status-setup-buffer)
                   (file-directory-p dir))
