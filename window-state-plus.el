@@ -153,20 +153,11 @@ Returns a list of (buffer window-parameters) for each side window."
     (nreverse side-windows)))
 
 (defun window-state-plus--delete-side-windows ()
-  "Delete all side windows.
-Returns list of deleted side window states for restoration."
-  (let ((deleted-states '()))
-    (dolist (win (window-list))
-      (when (and (window-parameter win 'window-side)
-                 (window-state-plus--is-side-window-buffer-p (window-buffer win)))
-        (push (list :buffer (window-buffer win)
-                   :side (window-parameter win 'window-side)
-                   :slot (window-parameter win 'window-slot)
-                   :width (window-width win)
-                   :height (window-height win))
-              deleted-states)
-        (ignore-errors (delete-window win))))
-    (nreverse deleted-states)))
+  "Delete the current frame's side windows managed by window-state-plus."
+  (dolist (win (window-list))
+    (when (and (window-parameter win 'window-side)
+               (window-state-plus--is-side-window-buffer-p (window-buffer win)))
+      (ignore-errors (delete-window win)))))
 
 (defun window-state-plus--restore-side-window (state)
   "Restore a single side window from STATE."

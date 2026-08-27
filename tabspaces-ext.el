@@ -193,15 +193,17 @@ This is a hook function for `tab-bar-tab-prevent-close-functions'."
           ;; `tab-bar--tab-index-by-name'), so pass TAB-INDEX/IDX directly.
           (let* ((tabs (funcall tab-bar-tabs-function))
                  (buffers (tabspaces--buffer-list nil tab-index))
-                 (other-tabs-buffers
-                  (cl-loop for idx from 0 below (length tabs)
-                           unless (= idx tab-index)
-                           append (tabspaces--buffer-list nil idx))))
+                 (protected (make-hash-table :test 'eq)))
+            ;; A buffer shared with any other tab must survive this close.
+            (cl-loop for idx from 0 below (length tabs)
+                     unless (= idx tab-index)
+                     do (dolist (buf (tabspaces--buffer-list nil idx))
+                          (puthash buf t protected)))
             (dolist (buf buffers)
               (when (buffer-live-p buf)
                 (let ((buf-name (buffer-name buf)))
                   (unless (or (tabspaces-ext--is-system-buffer-p buf-name)
-                              (member buf other-tabs-buffers))
+                              (gethash buf protected))
                     (kill-buffer buf)))))))))))
 
 (defun tabspaces-ext--tab-close-handler (tab arg)

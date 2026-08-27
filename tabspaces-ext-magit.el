@@ -146,6 +146,13 @@ Optional WORKTREE-PATH for worktree-specific branch detection."
           (file-name-nondirectory
            (directory-file-name default-directory))))))
 
+(defun tabspaces-ext-magit--tab-name-for-path (worktree-path)
+  "Return the tab name for WORKTREE-PATH.
+Binds `default-directory' to WORKTREE-PATH and also passes it explicitly,
+matching the calling convention of `tabspaces-ext-magit-tab-name-function'."
+  (let ((default-directory worktree-path))
+    (funcall tabspaces-ext-magit-tab-name-function worktree-path)))
+
 (defun tabspaces-ext-magit--kill-worktree-buffers (project-root)
   "Kill all buffers associated with PROJECT-ROOT worktree."
   (let* ((root (file-name-as-directory (expand-file-name project-root)))
@@ -203,7 +210,7 @@ here keeps a worktree's magit buffer out of every tab but its own."
            (current-tab-name (tabspaces-ext--get-current-tab-name))
            (current-tab-project
             (car (rassoc current-tab-name tabspaces-project-tab-map)))
-           (expected-tab-name (funcall tabspaces-ext-magit-tab-name-function))
+           (expected-tab-name (tabspaces-ext-magit--tab-name-for-path project-root))
            (magit-buffer (current-buffer)))
       (when (and expected-tab-name
                  (not (string= current-tab-name expected-tab-name))
@@ -245,9 +252,7 @@ This is advice for `magit-worktree-status'."
          (worktree-path (expand-file-name (or (car worktree-list)
                                               (and (stringp worktree) worktree)
                                               default-directory)))
-         (expected-tab-name
-          (let ((default-directory worktree-path))
-            (funcall tabspaces-ext-magit-tab-name-function worktree-path)))
+         (expected-tab-name (tabspaces-ext-magit--tab-name-for-path worktree-path))
          (current-tab-name (tabspaces-ext--get-current-tab-name)))
 
     ;; If already in correct tab or no expected name, just call original function
@@ -297,9 +302,7 @@ This is advice for `magit-worktree-delete'.
 Cleanup is deferred so that pending file-notify events are dispatched
 with valid callbacks before buffers are killed."
   (let* ((worktree-path (expand-file-name (car args)))
-         (target-tab-name
-          (let ((default-directory worktree-path))
-            (funcall tabspaces-ext-magit-tab-name-function worktree-path))))
+         (target-tab-name (tabspaces-ext-magit--tab-name-for-path worktree-path)))
 
     (if (or (not target-tab-name)
             (string= target-tab-name "Default"))
@@ -404,24 +407,31 @@ perpetuating the loss across restarts."
              (boundp 'project--list)
              (fboundp 'magit-toplevel))
     (tabspaces-ext-magit--clean-non-git-mappings)
-    ;; Add missing mappings for git project tabs
-    (let ((tab-names (tabspaces-ext--get-all-tab-names))
-          (mapped-tabs (mapcar #'cdr tabspaces-project-tab-map)))
-      (dolist (tab-name tab-names)
-        (when (and (string-match-p "@" tab-name)
-                   (not (member tab-name mapped-tabs)))
-          (catch 'found
-            (dolist (project-entry project--list)
-              (let ((project-root (expand-file-name (car project-entry))))
-                (when (and (file-directory-p project-root)
-                           (file-exists-p (expand-file-name ".git" project-root)))
-                  (let ((default-directory project-root))
-                    (when (condition-case nil (magit-toplevel) (error nil))
-                      (let ((expected (funcall tabspaces-ext-magit-tab-name-function)))
-                        (when (string= expected tab-name)
-                          (tabspaces-ext--add-project-tab-mapping
-                           project-root tab-name)
-                          (throw 'found t))))))))))))))
+    ;; Add missing mappings for git project tabs.  Iterate the project list
+    ;; once (computing each project's expected tab name at most once, since
+    ;; that shells out to git) rather than re-scanning all projects per tab,
+    ;; and stop early once every unmapped tab has been resolved.
+    (let* ((mapped-tabs (mapcar #'cdr tabspaces-project-tab-map))
+           (unmapped (cl-remove-if-not
+                      (lambda (name)
+                        (and (string-match-p "@" name)
+                             (not (member name mapped-tabs))))
+                      (tabspaces-ext--get-all-tab-names))))
+      (when unmapped
+        (catch 'done
+          (dolist (project-entry project--list)
+            (let ((project-root (expand-file-name (car project-entry))))
+              (when (and (file-directory-p project-root)
+                         (file-exists-p (expand-file-name ".git" project-root)))
+                (let ((default-directory project-root))
+                  (when (condition-case nil (magit-toplevel) (error nil))
+                    (let ((expected (tabspaces-ext-magit--tab-name-for-path
+                                     project-root)))
+                      (when (member expected unmapped)
+                        (tabspaces-ext--add-project-tab-mapping
+                         project-root expected)
+                        (setq unmapped (delete expected unmapped))
+                        (unless unmapped (throw 'done t))))))))))))))
 
 (defun tabspaces-ext-magit--restore-session-advice (&rest _)
   "Cleanup after tabspaces session restoration."
