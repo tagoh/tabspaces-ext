@@ -100,6 +100,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'tabspaces)
 (require 'window-state-plus)
 
@@ -188,12 +189,14 @@ This is a hook function for `tab-bar-tab-prevent-close-functions'."
                (not (get-buffer "*tabspaces--placeholder*")))
       (let ((tab-index (tabspaces-ext--find-tab-index name)))
         (when tab-index
+          ;; `tabspaces--buffer-list' takes a 0-based tab index (same as
+          ;; `tab-bar--tab-index-by-name'), so pass TAB-INDEX/IDX directly.
           (let* ((tabs (funcall tab-bar-tabs-function))
-                 (buffers (tabspaces--buffer-list nil (1+ tab-index)))
+                 (buffers (tabspaces--buffer-list nil tab-index))
                  (other-tabs-buffers
                   (cl-loop for idx from 0 below (length tabs)
                            unless (= idx tab-index)
-                           append (tabspaces--buffer-list nil (1+ idx)))))
+                           append (tabspaces--buffer-list nil idx))))
             (dolist (buf buffers)
               (when (buffer-live-p buf)
                 (let ((buf-name (buffer-name buf)))

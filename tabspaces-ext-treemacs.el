@@ -113,7 +113,14 @@ Falls back to `project-current' when the tab map has no entry."
 (defun tabspaces-ext-treemacs--sync-with-tabspaces ()
   "Sync treemacs to show the current project for the active tabspaces tab."
   (condition-case err
-      (when-let* ((root (tabspaces-ext-treemacs--get-project-root-for-tab))
+      (when-let* ((root0 (tabspaces-ext-treemacs--get-project-root-for-tab))
+                  ;; Match treemacs' own path canonicalization (truename +
+                  ;; trailing slash stripped); otherwise `root' never compares
+                  ;; equal to a stored project path and every sync needlessly
+                  ;; removes and re-adds the project (visible flicker).
+                  (root (if (fboundp 'treemacs-canonical-path)
+                            (treemacs-canonical-path (file-truename root0))
+                          root0))
                   (workspace (treemacs-current-workspace)))
         (let* ((projects (treemacs-workspace->projects workspace))
                (paths (mapcar #'treemacs-project->path projects)))

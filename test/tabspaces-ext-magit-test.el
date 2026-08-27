@@ -296,6 +296,24 @@ function): no remote, no branch, no .git, so the tab name has no
           (should (= 1 (length tabspaces-project-tab-map)))
           (should (eq selected-buffer magit-buffer)))))))
 
+(ert-deftest tabspaces-ext-magit-test/evict-removes-buffer-from-tab-list ()
+  "Relocating a worktree magit buffer removes it from the origin tab.
+Regression: a sibling worktree's status buffer leaked into the current
+tab's `buffer-list' (and thus into its saved session, resurfacing on
+restore) because it was displayed in that tab before being moved to its
+own worktree tab."
+  (with-temp-buffer
+    (let ((buf (current-buffer)))
+      ;; Simulate Emacs having recorded the buffer into the tab's lists when
+      ;; it was displayed in the wrong tab.
+      (set-frame-parameter nil 'buffer-list
+                           (cons buf (frame-parameter nil 'buffer-list)))
+      (set-frame-parameter nil 'buried-buffer-list
+                           (cons buf (frame-parameter nil 'buried-buffer-list)))
+      (tabspaces-ext-magit--evict-buffer-from-current-tab buf)
+      (should-not (memq buf (frame-parameter nil 'buffer-list)))
+      (should-not (memq buf (frame-parameter nil 'buried-buffer-list))))))
+
 ;;; Tests for --clean-non-git-mappings
 
 (ert-deftest tabspaces-ext-magit-test/clean-removes-non-git-at-mappings ()
@@ -623,6 +641,42 @@ unavailable, rather than signalling."
         (should (string= (tabspaces-ext-magit-default-tab-name)
                          (file-name-nondirectory
                           (directory-file-name dir))))))))
+
+;;; Tests for --kill-buffers-before-close (core)
+
+(ert-deftest tabspaces-ext-test/kill-buffers-before-close-uses-correct-tab-index ()
+  "Closing a tab kills only that tab's unique buffers and protects shared ones.
+Regression: the handler indexed `tabspaces--buffer-list' with a 1-based
+index, so it operated on the wrong (next) tab's buffer list."
+  (let* ((buf-a (generate-new-buffer " tsx-test-a"))
+         (buf-b (generate-new-buffer " tsx-test-b"))
+         (buf-shared (generate-new-buffer " tsx-test-shared"))
+         (buf-c (generate-new-buffer " tsx-test-c"))
+         (killed '()))
+    (unwind-protect
+        (let ((tab-bar-tabs-function (lambda () '((tab) (tab) (tab)))))
+          (cl-letf (((symbol-function 'tabspaces-ext--find-tab-index)
+                     (lambda (_name) 1))     ; closing the middle tab
+                    ((symbol-function 'tabspaces--buffer-list)
+                     (lambda (_frame idx)
+                       (pcase idx
+                         (0 (list buf-a buf-shared))
+                         (1 (list buf-b buf-shared))   ; the tab being closed
+                         (2 (list buf-c))
+                         (_ nil))))
+                    ((symbol-function 'tabspaces-ext--is-system-buffer-p)
+                     (lambda (_n) nil))
+                    ((symbol-function 'kill-buffer)
+                     (lambda (b) (push b killed))))
+            (tabspaces-ext--kill-buffers-before-close '((name . "myproj@main")))))
+      (mapc (lambda (b) (when (buffer-live-p b) (kill-buffer b)))
+            (list buf-a buf-b buf-shared buf-c)))
+    ;; Only the closing tab's unique buffer is killed.
+    (should (memq buf-b killed))
+    ;; Shared and other-tab buffers are protected / untouched.
+    (should-not (memq buf-shared killed))
+    (should-not (memq buf-c killed))
+    (should-not (memq buf-a killed))))
 
 (provide 'tabspaces-ext-magit-test)
 

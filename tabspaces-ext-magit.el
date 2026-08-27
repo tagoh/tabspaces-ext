@@ -148,8 +148,9 @@ Optional WORKTREE-PATH for worktree-specific branch detection."
 
 (defun tabspaces-ext-magit--kill-worktree-buffers (project-root)
   "Kill all buffers associated with PROJECT-ROOT worktree."
-  (let ((worktree-name (file-name-nondirectory
-                        (directory-file-name project-root))))
+  (let* ((root (file-name-as-directory (expand-file-name project-root)))
+         (worktree-name (file-name-nondirectory
+                         (directory-file-name project-root))))
     (dolist (buf (buffer-list))
       (when (buffer-live-p buf)
         (let ((buf-file (buffer-file-name buf))
@@ -159,18 +160,39 @@ Optional WORKTREE-PATH for worktree-specific branch detection."
           (when (and (not (tabspaces-ext--is-system-buffer-p buf-name))
                      (not (eq (buffer-local-value 'major-mode buf)
                               'treemacs-mode))
+                     ;; Compare against ROOT with a trailing slash so a sibling
+                     ;; worktree sharing a name prefix (e.g. "main_feature" vs
+                     ;; "main_feature-2") is not matched.
                      (or (and buf-file
-                              (string-prefix-p project-root
-                                               (expand-file-name buf-file)))
+                              (string-prefix-p root (expand-file-name buf-file)))
                          (and buf-dir
-                              (string-prefix-p project-root
-                                               (expand-file-name buf-dir)))
+                              (string-prefix-p root (expand-file-name buf-dir)))
                          (and (string-prefix-p " *Old buffer" buf-name)
                               (string-match-p (regexp-quote worktree-name)
                                               buf-name))))
             (kill-buffer buf)))))))
 
 ;;; Magit integration
+
+(defun tabspaces-ext-magit--evict-buffer-from-current-tab (buffer)
+  "Remove BUFFER from the current tab's windows and buffer lists.
+Called before relocating a worktree magit buffer to its own tab.
+
+tabspaces tracks tab membership via the frame `buffer-list' parameter,
+and Emacs records a buffer there as soon as it is displayed in the tab.
+When `magit-status-setup-buffer' shows a sibling worktree's status in the
+current (wrong) tab, that buffer leaks into the tab's `buffer-list' and
+window layout, and is then persisted into the tab's session.  Evicting it
+here keeps a worktree's magit buffer out of every tab but its own."
+  ;; Restore the previous buffer in any window of this tab showing BUFFER,
+  ;; so it neither stays visible nor gets re-recorded on tab return.
+  (dolist (win (get-buffer-window-list buffer nil nil))
+    (switch-to-prev-buffer win 'bury))
+  ;; Drop it from the tab's buffer lists.
+  (set-frame-parameter nil 'buffer-list
+                       (delq buffer (frame-parameter nil 'buffer-list)))
+  (set-frame-parameter nil 'buried-buffer-list
+                       (delq buffer (frame-parameter nil 'buried-buffer-list))))
 
 (defun tabspaces-ext-magit--worktree-ensure-tabspace ()
   "Automatically switch to or create tabspace for git worktree in magit buffers."
@@ -188,6 +210,11 @@ Optional WORKTREE-PATH for worktree-specific branch detection."
                  (or (null current-tab-project)
                      (file-exists-p
                       (expand-file-name ".git" current-tab-project))))
+        ;; The buffer was just displayed in the current (origin) tab.  Evict it
+        ;; before relocating so it does not leak into that tab's buffer list and
+        ;; window layout (which would otherwise be saved into the origin
+        ;; session and resurrected on restore).
+        (tabspaces-ext-magit--evict-buffer-from-current-tab magit-buffer)
         ;; Switch to or create the appropriate tab
         (if (member expected-tab-name (tabspaces-ext--get-all-tab-names))
             ;; Switch to existing tab
@@ -212,7 +239,12 @@ This is advice for `magit-worktree-status'."
                             worktree
                           (cl-find-if (lambda (wt) (string= (car wt) worktree))
                                       (magit-list-worktrees))))
-         (worktree-path (expand-file-name (car worktree-list)))
+         ;; Fall back to WORKTREE itself when the lookup misses (e.g. path
+         ;; normalization differences), so we never pass nil to
+         ;; `expand-file-name'.
+         (worktree-path (expand-file-name (or (car worktree-list)
+                                              (and (stringp worktree) worktree)
+                                              default-directory)))
          (expected-tab-name
           (let ((default-directory worktree-path))
             (funcall tabspaces-ext-magit-tab-name-function worktree-path)))

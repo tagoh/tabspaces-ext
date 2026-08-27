@@ -95,6 +95,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'window)
 
 ;;; Customization
@@ -146,7 +147,9 @@ Returns a list of (buffer window-parameters) for each side window."
                         :height (window-height win)
                         :dedicated (window-dedicated-p win))
                    side-windows)))))
-     nil t)
+     ;; Current frame only, to stay symmetric with `--delete-side-windows'
+     ;; and `window-state-plus-put', which operate on the selected frame.
+     nil nil)
     (nreverse side-windows)))
 
 (defun window-state-plus--delete-side-windows ()
