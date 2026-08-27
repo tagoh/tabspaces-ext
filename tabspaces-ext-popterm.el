@@ -211,6 +211,33 @@ before popterm is loaded, to support session restoration."
   "Sync popterm window state when switching tabs."
   (tabspaces-ext-popterm--sync-window-for-tab))
 
+;;; Window display
+
+(defun tabspaces-ext-popterm--window-show-at-bottom (orig-fun buffer)
+  "Show popterm BUFFER in a full-width bottom side window.
+popterm's own `popterm--window-show' splits `frame-root-window', which
+only covers the main window area when a left/right side window (e.g. the
+Treemacs sidebar) is present -- leaving popterm in the bottom of the main
+area (\"right-bottom\") rather than spanning the whole frame.  A bottom
+side window spans the full width and pushes the vertical side windows up.
+
+Falls back to ORIG-FUN when the side window cannot be created."
+  (let* ((ratio (if (boundp 'popterm-window-height-ratio)
+                    popterm-window-height-ratio
+                  0.3))
+         (win (display-buffer-in-side-window
+               buffer `((side . bottom)
+                        (slot . 0)
+                        (window-height . ,ratio)
+                        (preserve-size . (nil . t))))))
+    (if (not (window-live-p win))
+        (funcall orig-fun buffer)
+      (setq popterm--active-display-method 'window)
+      (setq popterm--window win)
+      (select-window win)
+      (popterm--reset-cursor-point buffer)
+      win)))
+
 ;;; Layout fixes
 
 (defun tabspaces-ext-popterm--fix-layout (&rest _)
@@ -218,7 +245,12 @@ before popterm is loaded, to support session restoration."
 Does nothing when popterm is not currently displayed: the buffer often
 outlives its window, so keying off buffer existence alone would re-open a
 popterm the user has deliberately closed on every tab switch (including
-the tab cycling done by session auto-save)."
+the tab cycling done by session auto-save).
+
+Session restore needs no help here: popterm is a bottom side window (see
+`tabspaces-ext-popterm--window-show-at-bottom'), so tabspaces restores it
+via `window-state-put' -- but only when it was actually displayed at save
+time, which is exactly the desired behaviour."
   (when-let* ((tab-name (tabspaces-ext--get-current-tab-name))
               (project-dir (tabspaces-ext-popterm--get-project-dir tab-name))
               (popterm-buf (get-buffer (tabspaces-ext-popterm--buffer-name popterm-backend tab-name)))
@@ -260,10 +292,14 @@ the tab cycling done by session auto-save)."
     ;; Buffer isolation
     (advice-add 'popterm--buffer-name :around #'tabspaces-ext-popterm--buffer-name-with-tab)
     (advice-add 'popterm--buffer-list :around #'tabspaces-ext-popterm--filter-buffers-by-tab)
+    ;; Window display: full-width bottom side window instead of a main-area split
+    (advice-add 'popterm--window-show :around #'tabspaces-ext-popterm--window-show-at-bottom)
     ;; Window sync
     (advice-add 'popterm-window-toggle :around #'tabspaces-ext-popterm--sync-window-state)
     (add-hook 'tab-bar-tab-post-select-functions #'tabspaces-ext-popterm--handle-tab-switch)
-    ;; Layout fixes
+    ;; Layout fixes: only reposition an already-visible popterm, never reopen
+    ;; a closed one.  Session restore is handled by tabspaces' own
+    ;; `window-state-put' now that popterm is a bottom side window.
     (advice-add 'tabspaces-restore-session :after #'tabspaces-ext-popterm--fix-layout)
     (advice-add 'tab-bar-select-tab :after #'tabspaces-ext-popterm--fix-layout)
     (advice-add 'tab-bar-select-tab-by-name :after #'tabspaces-ext-popterm--fix-layout)
@@ -277,6 +313,8 @@ the tab cycling done by session auto-save)."
     ;; Buffer isolation
     (advice-remove 'popterm--buffer-name #'tabspaces-ext-popterm--buffer-name-with-tab)
     (advice-remove 'popterm--buffer-list #'tabspaces-ext-popterm--filter-buffers-by-tab)
+    ;; Window display
+    (advice-remove 'popterm--window-show #'tabspaces-ext-popterm--window-show-at-bottom)
     ;; Window sync
     (advice-remove 'popterm-window-toggle #'tabspaces-ext-popterm--sync-window-state)
     (remove-hook 'tab-bar-tab-post-select-functions #'tabspaces-ext-popterm--handle-tab-switch)
