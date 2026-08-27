@@ -166,6 +166,23 @@
         (should (= 1 (length tabspaces-project-tab-map)))
         (should (string= (cdar tabspaces-project-tab-map) "myrepo@develop"))))))
 
+(ert-deftest tabspaces-ext-magit-test/repair-handles-unset-project-list ()
+  "Repair must not signal when `project--list' is project.el's `unset' sentinel.
+This reproduces the startup crash (wrong-type-argument listp unset) that
+aborted the restore `:after' advice.  Stale non-git mappings must still be
+cleaned even though the add-mappings pass is skipped."
+  (with-temp-project-dir dir
+    (let ((tabspaces-project-tab-map (list (cons dir "myproject@main")))
+          (project--list 'unset))       ; the uninitialized sentinel
+      (cl-letf (((symbol-function 'tabspaces-ext--get-all-tab-names)
+                 (lambda () '("myproject@main"))))
+        ;; No .git in DIR, so this is a stale mapping that clean-up removes.
+        (should-not
+         (condition-case err
+             (progn (tabspaces-ext-magit--repair-project-tab-mappings) nil)
+           (error err)))
+        (should (null tabspaces-project-tab-map))))))
+
 ;;; Tests for --worktree-ensure-tabspace
 
 (ert-deftest tabspaces-ext-magit-test/ensure-tabspace-skips-non-git-project-tab ()

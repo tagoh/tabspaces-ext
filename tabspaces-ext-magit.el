@@ -404,34 +404,42 @@ restored from the global session file lose their mapping.  Without a mapping,
 `tabspaces-save-all-project-sessions' treats them as non-project tabs,
 perpetuating the loss across restarts."
   (when (and (boundp 'tabspaces-project-tab-map)
-             (boundp 'project--list)
              (fboundp 'magit-toplevel))
     (tabspaces-ext-magit--clean-non-git-mappings)
-    ;; Add missing mappings for git project tabs.  Iterate the project list
-    ;; once (computing each project's expected tab name at most once, since
-    ;; that shells out to git) rather than re-scanning all projects per tab,
-    ;; and stop early once every unmapped tab has been resolved.
-    (let* ((mapped-tabs (mapcar #'cdr tabspaces-project-tab-map))
-           (unmapped (cl-remove-if-not
-                      (lambda (name)
-                        (and (string-match-p "@" name)
-                             (not (member name mapped-tabs))))
-                      (tabspaces-ext--get-all-tab-names))))
-      (when unmapped
-        (catch 'done
-          (dolist (project-entry project--list)
-            (let ((project-root (expand-file-name (car project-entry))))
-              (when (and (file-directory-p project-root)
-                         (file-exists-p (expand-file-name ".git" project-root)))
-                (let ((default-directory project-root))
-                  (when (condition-case nil (magit-toplevel) (error nil))
-                    (let ((expected (tabspaces-ext-magit--tab-name-for-path
-                                     project-root)))
-                      (when (member expected unmapped)
-                        (tabspaces-ext--add-project-tab-mapping
-                         project-root expected)
-                        (setq unmapped (delete expected unmapped))
-                        (unless unmapped (throw 'done t))))))))))))))
+    ;; `project--list' is the sentinel symbol `unset' until project.el has
+    ;; read the saved project list -- which may not have happened yet during
+    ;; early startup session restore.  Iterating it in that state signals
+    ;; (wrong-type-argument listp unset), which aborts this `:after' advice
+    ;; and trips tabspaces' "session restore failed" handler.  Force a read
+    ;; when possible, then guard defensively so a non-list value is a no-op.
+    (when (fboundp 'project--ensure-read-project-list)
+      (ignore-errors (project--ensure-read-project-list)))
+    (when (and (boundp 'project--list) (listp project--list))
+      ;; Add missing mappings for git project tabs.  Iterate the project list
+      ;; once (computing each project's expected tab name at most once, since
+      ;; that shells out to git) rather than re-scanning all projects per tab,
+      ;; and stop early once every unmapped tab has been resolved.
+      (let* ((mapped-tabs (mapcar #'cdr tabspaces-project-tab-map))
+             (unmapped (cl-remove-if-not
+                        (lambda (name)
+                          (and (string-match-p "@" name)
+                               (not (member name mapped-tabs))))
+                        (tabspaces-ext--get-all-tab-names))))
+        (when unmapped
+          (catch 'done
+            (dolist (project-entry project--list)
+              (let ((project-root (expand-file-name (car project-entry))))
+                (when (and (file-directory-p project-root)
+                           (file-exists-p (expand-file-name ".git" project-root)))
+                  (let ((default-directory project-root))
+                    (when (condition-case nil (magit-toplevel) (error nil))
+                      (let ((expected (tabspaces-ext-magit--tab-name-for-path
+                                       project-root)))
+                        (when (member expected unmapped)
+                          (tabspaces-ext--add-project-tab-mapping
+                           project-root expected)
+                          (setq unmapped (delete expected unmapped))
+                          (unless unmapped (throw 'done t)))))))))))))))
 
 (defun tabspaces-ext-magit--restore-session-advice (&rest _)
   "Cleanup after tabspaces session restoration."

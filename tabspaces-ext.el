@@ -177,6 +177,66 @@ When non-nil, creates separate popterm instances per tab."
     (tab-bar-rename-tab tab-name)
     (tabspaces-ext--add-project-tab-mapping project-root tab-name)))
 
+;;; Cross-workspace buffer leak filter
+
+;; Tabspace-unaware commands (e.g. `switch-to-buffer'/`find-file' issued by
+;; packages like org-capture based tools) open their buffers into whatever
+;; tab is current, which adds them to that tab's `buffer-list'.  When a
+;; project tab's session is then saved, those foreign buffers are persisted
+;; into it -- and, since restore re-materializes every record back into the
+;; tab, the leak is self-perpetuating across restarts.  These helpers drop,
+;; at save time, any record that demonstrably belongs to *another* mapped
+;; project so a project tab's session only keeps its own buffers.
+
+(defun tabspaces-ext--tab-project-root (tab-name)
+  "Return the project root mapped to TAB-NAME, or nil.
+Mirrors `tabspaces--get-project-for-tab' numbered-suffix handling so a
+tab like \"proj<2>\" resolves to the same root as \"proj\"."
+  (when (and tab-name (boundp 'tabspaces-project-tab-map))
+    (or (car (rassoc tab-name tabspaces-project-tab-map))
+        (when (string-match "\\`\\(.+\\)<[0-9]+>\\'" tab-name)
+          (car (rassoc (match-string 1 tab-name) tabspaces-project-tab-map))))))
+
+(defun tabspaces-ext--record-directory (rec)
+  "Return the directory associated with session buffer record REC, or nil.
+REC is either a file path string (legacy format) or a plist with `:dir'."
+  (cond
+   ((stringp rec) (file-name-directory rec))
+   ((consp rec) (plist-get rec :dir))))
+
+(defun tabspaces-ext--foreign-record-p (rec tab-root)
+  "Return non-nil if REC belongs to a project other than TAB-ROOT.
+A record is foreign when its directory lies under some project root in
+`tabspaces-project-tab-map' that is not TAB-ROOT.  Records with no
+directory, records under TAB-ROOT, and records under no known project
+\(e.g. a loose file outside every workspace) are kept."
+  (when tab-root
+    (let ((dir (tabspaces-ext--record-directory rec)))
+      (when (stringp dir)
+        (let ((edir (expand-file-name dir))
+              (eroot (file-name-as-directory (expand-file-name tab-root))))
+          (and (not (string-prefix-p eroot edir))
+               (cl-some
+                (lambda (entry)
+                  (let ((r (file-name-as-directory (expand-file-name (car entry)))))
+                    (and (not (string= r eroot))
+                         (string-prefix-p r edir))))
+                tabspaces-project-tab-map)))))))
+
+(defun tabspaces-ext--filter-foreign-buffers (records)
+  "Remove RECORDS that belong to another project's workspace.
+Advice (`:filter-return') for `tabspaces--store-buffers'.  The current
+tab during a save is the tab being saved, so its mapped project root
+determines what counts as foreign.  Non-project tabs (no mapped root)
+keep every record."
+  (let ((tab-root (tabspaces-ext--tab-project-root
+                   (tabspaces-ext--get-current-tab-name))))
+    (if tab-root
+        (cl-remove-if (lambda (rec)
+                        (tabspaces-ext--foreign-record-p rec tab-root))
+                      records)
+      records)))
+
 ;;; Buffer cleanup on tab close
 
 (defun tabspaces-ext--kill-buffers-before-close (tab)
@@ -352,10 +412,15 @@ When enabled, provides:
       (progn
         ;; Core functionality
         (add-hook 'tab-bar-tab-prevent-close-functions #'tabspaces-ext--tab-close-handler)
+        ;; Keep a project tab's saved session free of buffers that leaked in
+        ;; from other workspaces.
+        (advice-add 'tabspaces--store-buffers :filter-return
+                    #'tabspaces-ext--filter-foreign-buffers)
         ;; Load enabled integrations
         (tabspaces-ext--load-integrations))
     ;; Disable
     (remove-hook 'tab-bar-tab-prevent-close-functions #'tabspaces-ext--tab-close-handler)
+    (advice-remove 'tabspaces--store-buffers #'tabspaces-ext--filter-foreign-buffers)
     (tabspaces-ext--unload-integrations)))
 
 (provide 'tabspaces-ext)
