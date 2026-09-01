@@ -100,18 +100,28 @@ before treemacs is loaded, to support session restoration."
 
 (defun tabspaces-ext-treemacs--get-project-root-for-tab ()
   "Get project root for current tabspaces tab.
-Falls back to `project-current' when the tab map has no entry."
+Resolves via `tabspaces-ext--tab-project-root' (numbered-suffix aware).
+A project-shaped tab (name contains \"@\") with no mapping returns nil so
+treemacs is left untouched -- borrowing `project-current' here would sync
+to whatever buffer happens to be current (e.g. a leaked ~/.emacs.d buffer)
+rather than the tab's real project.  `project-current' is used only as a
+fallback for genuinely non-project tabs."
   (let ((tab-name (tabspaces-ext--get-current-tab-name)))
     (when tab-name
-      (let ((from-map (and (boundp 'tabspaces-project-tab-map)
-                           (car (rassoc tab-name tabspaces-project-tab-map)))))
-        (if (and from-map (file-directory-p from-map))
-            (expand-file-name from-map)
-          (when-let* ((proj (project-current)))
-            (expand-file-name (project-root proj))))))))
+      (let ((from-map (tabspaces-ext--tab-project-root tab-name)))
+        (cond
+         ((and from-map (file-directory-p from-map))
+          (expand-file-name from-map))
+         ((string-match-p "@" tab-name) nil)
+         ((when-let* ((proj (project-current)))
+            (expand-file-name (project-root proj)))))))))
 
 (defun tabspaces-ext-treemacs--sync-with-tabspaces ()
-  "Sync treemacs to show the current project for the active tabspaces tab."
+  "Sync treemacs to show the current project for the active tabspaces tab.
+Return non-nil when the tab's project root resolved and treemacs was
+reachable (synced, or already showing the right project); nil when no
+root could be resolved or an error occurred.  Callers use this to record
+a tab as synced only when the sync actually happened."
   (condition-case err
       (when-let* ((root0 (tabspaces-ext-treemacs--get-project-root-for-tab))
                   ;; Match treemacs' own path canonicalization (truename +
@@ -143,8 +153,10 @@ Falls back to `project-current' when the tab map has no entry."
                                   (with-selected-window w
                                     (goto-char (point-min))
                                     (treemacs-pulse-on-success "Synced to %s" p))))
-                              window buffer (file-name-nondirectory (directory-file-name root)))))))
-    (error (message "Treemacs sync error: %S" err))))
+                              window buffer (file-name-nondirectory (directory-file-name root))))))
+        ;; Root resolved and treemacs reachable: report success.
+        t)
+    (error (message "Treemacs sync error: %S" err) nil)))
 
 (let ((last-synced-tab nil)
       (pending-timer nil))
@@ -152,11 +164,18 @@ Falls back to `project-current' when the tab map has no entry."
     "Handle treemacs updates when switching tabspaces tabs."
     (let ((current-tab (tabspaces-ext--get-current-tab-name)))
       (unless (equal current-tab last-synced-tab)
-        (setq last-synced-tab current-tab)
         (when (timerp pending-timer)
           (cancel-timer pending-timer))
+        ;; Record the tab as synced only after the sync actually resolves a
+        ;; root; a no-op sync (unmapped tab, treemacs not ready) must not
+        ;; poison the guard, or a later switch back would never retry.
         (setq pending-timer
-              (run-with-idle-timer 0.3 nil #'tabspaces-ext-treemacs--sync-with-tabspaces)))))
+              (run-with-idle-timer
+               0.3 nil
+               (lambda ()
+                 (when (tabspaces-ext-treemacs--sync-with-tabspaces)
+                   (setq last-synced-tab
+                         (tabspaces-ext--get-current-tab-name)))))))))
 
   (defun tabspaces-ext-treemacs--treemacs-opened (&rest _)
     "Sync treemacs when it's opened."

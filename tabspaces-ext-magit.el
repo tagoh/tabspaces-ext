@@ -382,21 +382,51 @@ Fixes tabspaces bug where placeholder tabs aren't automatically cleaned up."
   (tabspaces-ext-magit--clean-non-git-mappings))
 
 (defun tabspaces-ext-magit--clean-non-git-mappings ()
-  "Remove project@branch entries from `tabspaces-project-tab-map' for non-git dirs."
+  "Remove project@branch entries whose worktree directory no longer exists.
+Only a vanished directory is treated as stale.  A live worktree whose
+`.git' pointer is momentarily unresolvable (e.g. while git is juggling
+worktrees) must keep its mapping -- dropping it here would orphan the tab,
+and nothing re-adds a mapping for an already-open tab whose worktree
+later reappears.  `tabspaces-ext-magit--repair-project-tab-mappings'
+re-validates surviving entries against `magit-toplevel'."
   (when (boundp 'tabspaces-project-tab-map)
     (setq tabspaces-project-tab-map
           (cl-remove-if
            (lambda (entry)
              (and (string-match-p "@" (cdr entry))
-                  (not (file-exists-p
-                        (expand-file-name
-                         ".git" (expand-file-name (car entry)))))))
+                  (not (file-directory-p (expand-file-name (car entry))))))
            tabspaces-project-tab-map))))
+
+(defun tabspaces-ext-magit--infer-root-for-tab (tab-name tab-index)
+  "Return the git worktree root among TAB-INDEX's buffers matching TAB-NAME.
+Scan the tab's own buffers (`tabspaces--buffer-list' takes a 0-based
+index) and return the first worktree root whose derived tab name equals
+TAB-NAME.  Matching on the derived name means a foreign buffer that
+leaked into the tab -- e.g. ~/.emacs.d/custom.el, which resolves to a
+different project name -- is skipped rather than mistaken for the tab's
+project.  Returns nil when no buffer reveals a matching worktree."
+  (when (fboundp 'magit-toplevel)
+    (catch 'root
+      (dolist (buf (tabspaces--buffer-list nil tab-index))
+        (when (buffer-live-p buf)
+          (let* ((f (buffer-file-name buf))
+                 (d (or (and f (file-name-directory f))
+                        (buffer-local-value 'default-directory buf))))
+            (when (and d (file-directory-p (expand-file-name d)))
+              (let* ((default-directory (expand-file-name d))
+                     (root (condition-case nil (magit-toplevel) (error nil))))
+                (when (and root
+                           (string= tab-name
+                                    (tabspaces-ext-magit--tab-name-for-path
+                                     (file-name-as-directory
+                                      (expand-file-name root)))))
+                  (throw 'root (file-name-as-directory
+                                (expand-file-name root))))))))))))
 
 (defun tabspaces-ext-magit--repair-project-tab-mappings ()
   "Repair `tabspaces-project-tab-map' after session restore.
 Two passes:
-1. Remove stale project@branch mappings whose project root has no .git.
+1. Remove stale project@branch mappings whose worktree directory is gone.
 2. Re-populate missing mappings for existing project@branch tabs.
 The magit advice on `tabspaces-generate-descriptive-tab-name' is bypassed
 during session restore (placeholder buffer check), so project@branch tabs
@@ -406,26 +436,36 @@ perpetuating the loss across restarts."
   (when (and (boundp 'tabspaces-project-tab-map)
              (fboundp 'magit-toplevel))
     (tabspaces-ext-magit--clean-non-git-mappings)
-    ;; `project--list' is the sentinel symbol `unset' until project.el has
-    ;; read the saved project list -- which may not have happened yet during
-    ;; early startup session restore.  Iterating it in that state signals
-    ;; (wrong-type-argument listp unset), which aborts this `:after' advice
-    ;; and trips tabspaces' "session restore failed" handler.  Force a read
-    ;; when possible, then guard defensively so a non-list value is a no-op.
-    (when (fboundp 'project--ensure-read-project-list)
-      (ignore-errors (project--ensure-read-project-list)))
-    (when (and (boundp 'project--list) (listp project--list))
-      ;; Add missing mappings for git project tabs.  Iterate the project list
-      ;; once (computing each project's expected tab name at most once, since
-      ;; that shells out to git) rather than re-scanning all projects per tab,
-      ;; and stop early once every unmapped tab has been resolved.
-      (let* ((mapped-tabs (mapcar #'cdr tabspaces-project-tab-map))
-             (unmapped (cl-remove-if-not
-                        (lambda (name)
-                          (and (string-match-p "@" name)
-                               (not (member name mapped-tabs))))
-                        (tabspaces-ext--get-all-tab-names))))
-        (when unmapped
+    (let ((unmapped (cl-remove-if-not
+                     (lambda (name)
+                       (and (string-match-p "@" name)
+                            (not (member name (mapcar #'cdr tabspaces-project-tab-map)))))
+                     (tabspaces-ext--get-all-tab-names))))
+      ;; Pass 1: resolve each unmapped tab from its own live buffers.  This is
+      ;; authoritative -- it uses what the tab actually contains -- and heals
+      ;; worktrees that project.el does not remember (`project--list' is not a
+      ;; reliable record of what a tab belongs to; a worktree reached without a
+      ;; project command never lands there).
+      (dolist (name (copy-sequence unmapped))
+        (when-let* ((idx (tabspaces-ext--find-tab-index name))
+                    (root (tabspaces-ext-magit--infer-root-for-tab name idx)))
+          (tabspaces-ext--add-project-tab-mapping root name)
+          (setq unmapped (delete name unmapped))))
+      ;; Pass 2: fall back to `project--list' for any tab whose buffers did not
+      ;; reveal a worktree (e.g. no live file buffers yet during early restore).
+      (when unmapped
+        ;; `project--list' is the sentinel symbol `unset' until project.el has
+        ;; read the saved project list -- which may not have happened yet during
+        ;; early startup session restore.  Iterating it in that state signals
+        ;; (wrong-type-argument listp unset), which aborts this `:after' advice
+        ;; and trips tabspaces' "session restore failed" handler.  Force a read
+        ;; when possible, then guard defensively so a non-list value is a no-op.
+        (when (fboundp 'project--ensure-read-project-list)
+          (ignore-errors (project--ensure-read-project-list)))
+        (when (and (boundp 'project--list) (listp project--list))
+          ;; Iterate the project list once (computing each project's expected
+          ;; tab name at most once, since that shells out to git) and stop early
+          ;; once every unmapped tab has been resolved.
           (catch 'done
             (dolist (project-entry project--list)
               (let ((project-root (expand-file-name (car project-entry))))

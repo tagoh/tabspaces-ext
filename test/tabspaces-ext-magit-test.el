@@ -126,16 +126,15 @@
         (should-not magit-called)
         (should (null tabspaces-project-tab-map))))))
 
-(ert-deftest tabspaces-ext-magit-test/repair-removes-stale-mapping-for-non-git ()
-  "Repair should remove @-mappings whose project root has no .git."
-  (with-temp-project-dir dir
-    (let ((tabspaces-project-tab-map
-           (list (cons dir "myproject@main")))
-          (project--list (list (list dir))))
-      (cl-letf (((symbol-function 'tabspaces-ext--get-all-tab-names)
-                 (lambda () nil)))
-        (tabspaces-ext-magit--repair-project-tab-mappings)
-        (should (null tabspaces-project-tab-map))))))
+(ert-deftest tabspaces-ext-magit-test/repair-removes-stale-mapping-for-missing-dir ()
+  "Repair should remove @-mappings whose worktree directory is gone."
+  (let ((tabspaces-project-tab-map
+         (list (cons "/no/such/worktree/" "myproject@main")))
+        (project--list nil))
+    (cl-letf (((symbol-function 'tabspaces-ext--get-all-tab-names)
+               (lambda () nil)))
+      (tabspaces-ext-magit--repair-project-tab-mappings)
+      (should (null tabspaces-project-tab-map)))))
 
 (ert-deftest tabspaces-ext-magit-test/repair-keeps-mapping-for-git-project ()
   "Repair should not remove @-mappings whose project root has .git."
@@ -166,22 +165,87 @@
         (should (= 1 (length tabspaces-project-tab-map)))
         (should (string= (cdar tabspaces-project-tab-map) "myrepo@develop"))))))
 
+;;; Tests for --infer-root-for-tab and buffer-based repair (Fix 1)
+
+(ert-deftest tabspaces-ext-magit-test/infer-root-picks-matching-worktree ()
+  "Infer a tab's root from its own buffers, ignoring a foreign buffer.
+The worktree buffer's root yields the tab name; the foreign buffer (e.g.
+a leaked ~/.emacs.d/custom.el) yields a different name and is skipped."
+  (with-temp-project-dir wt
+    (with-temp-project-dir foreign
+      (let ((wt-buf (generate-new-buffer " tsx-wt"))
+            (foreign-buf (generate-new-buffer " tsx-foreign")))
+        (unwind-protect
+            (progn
+              (with-current-buffer wt-buf (setq default-directory wt))
+              (with-current-buffer foreign-buf (setq default-directory foreign))
+              (cl-letf (((symbol-function 'tabspaces--buffer-list)
+                         (lambda (_frame _idx) (list foreign-buf wt-buf)))
+                        ((symbol-function 'magit-toplevel)
+                         (lambda ()
+                           (let ((d (expand-file-name default-directory)))
+                             (cond ((string-prefix-p (expand-file-name wt) d) wt)
+                                   ((string-prefix-p (expand-file-name foreign) d)
+                                    foreign)))))
+                        ((symbol-value 'tabspaces-ext-magit-tab-name-function)
+                         (lambda (&optional _wt)
+                           (if (string-prefix-p (expand-file-name wt)
+                                                (expand-file-name default-directory))
+                               "proj@feature"
+                             "other@main"))))
+                (should (string= (tabspaces-ext-magit--infer-root-for-tab
+                                  "proj@feature" 0)
+                                 (file-name-as-directory (expand-file-name wt))))))
+          (kill-buffer wt-buf)
+          (kill-buffer foreign-buf))))))
+
+(ert-deftest tabspaces-ext-magit-test/repair-heals-from-tab-buffers ()
+  "Repair should re-map an @-tab from its own buffers when project.el
+does not know the worktree (`project--list' empty).  Regression: the
+mapping was only rebuilt from `project--list', so a worktree not
+remembered there stayed permanently orphaned."
+  (with-temp-project-dir wt
+    (make-directory (expand-file-name ".git" wt))
+    (let ((wt-buf (generate-new-buffer " tsx-wt"))
+          (tabspaces-project-tab-map nil)
+          (project--list nil))          ; project.el does not know this worktree
+      (unwind-protect
+          (progn
+            (with-current-buffer wt-buf (setq default-directory wt))
+            (cl-letf (((symbol-function 'tabspaces-ext--get-all-tab-names)
+                       (lambda () '("proj@feature")))
+                      ((symbol-function 'tabspaces-ext--find-tab-index)
+                       (lambda (_name) 0))
+                      ((symbol-function 'tabspaces--buffer-list)
+                       (lambda (_frame _idx) (list wt-buf)))
+                      ((symbol-function 'magit-toplevel) (lambda () wt))
+                      ((symbol-value 'tabspaces-ext-magit-tab-name-function)
+                       (lambda (&optional _wt) "proj@feature")))
+              (tabspaces-ext-magit--repair-project-tab-mappings)
+              (should (= 1 (length tabspaces-project-tab-map)))
+              (should (string= (cdar tabspaces-project-tab-map) "proj@feature"))
+              (should (string= (caar tabspaces-project-tab-map)
+                               (file-name-as-directory (expand-file-name wt))))))
+        (kill-buffer wt-buf)))))
+
 (ert-deftest tabspaces-ext-magit-test/repair-handles-unset-project-list ()
   "Repair must not signal when `project--list' is project.el's `unset' sentinel.
 This reproduces the startup crash (wrong-type-argument listp unset) that
-aborted the restore `:after' advice.  Stale non-git mappings must still be
-cleaned even though the add-mappings pass is skipped."
-  (with-temp-project-dir dir
-    (let ((tabspaces-project-tab-map (list (cons dir "myproject@main")))
-          (project--list 'unset))       ; the uninitialized sentinel
-      (cl-letf (((symbol-function 'tabspaces-ext--get-all-tab-names)
-                 (lambda () '("myproject@main"))))
-        ;; No .git in DIR, so this is a stale mapping that clean-up removes.
-        (should-not
-         (condition-case err
-             (progn (tabspaces-ext-magit--repair-project-tab-mappings) nil)
-           (error err)))
-        (should (null tabspaces-project-tab-map))))))
+aborted the restore `:after' advice.  A stale mapping (missing worktree
+directory) must still be cleaned even though the fallback add pass is
+skipped."
+  (let ((tabspaces-project-tab-map (list (cons "/no/such/worktree/" "myproject@main")))
+        (project--list 'unset))         ; the uninitialized sentinel
+    (cl-letf (((symbol-function 'tabspaces-ext--get-all-tab-names)
+               (lambda () '("myproject@main"))))
+      ;; Directory is gone, so this is a stale mapping that clean-up removes;
+      ;; the tab remains unmapped and pass 1 (its buffers) reveals no worktree,
+      ;; so the code reaches the `unset' guard without signalling.
+      (should-not
+       (condition-case err
+           (progn (tabspaces-ext-magit--repair-project-tab-mappings) nil)
+         (error err)))
+      (should (null tabspaces-project-tab-map)))))
 
 ;;; Tests for --worktree-ensure-tabspace
 
@@ -333,13 +397,23 @@ own worktree tab."
 
 ;;; Tests for --clean-non-git-mappings
 
-(ert-deftest tabspaces-ext-magit-test/clean-removes-non-git-at-mappings ()
-  "Should remove @-mappings for directories without .git."
-  (with-temp-project-dir dir
+(ert-deftest tabspaces-ext-magit-test/clean-removes-missing-dir-mappings ()
+  "Should remove @-mappings whose worktree directory no longer exists."
+  (let ((tabspaces-project-tab-map
+         (list (cons "/no/such/worktree/" "myproject@main"))))
+    (tabspaces-ext-magit--clean-non-git-mappings)
+    (should (null tabspaces-project-tab-map))))
+
+(ert-deftest tabspaces-ext-magit-test/clean-keeps-live-dir-without-git ()
+  "Should keep an @-mapping for a live worktree whose .git is unresolvable.
+Regression: dropping a mapping merely because `.git' is momentarily
+missing orphaned the tab (nothing re-adds a mapping for an already-open
+tab whose worktree reappears)."
+  (with-temp-project-dir dir            ; exists, but has no .git
     (let ((tabspaces-project-tab-map
            (list (cons dir "myproject@main"))))
       (tabspaces-ext-magit--clean-non-git-mappings)
-      (should (null tabspaces-project-tab-map)))))
+      (should (= 1 (length tabspaces-project-tab-map))))))
 
 (ert-deftest tabspaces-ext-magit-test/clean-keeps-git-at-mappings ()
   "Should keep @-mappings for directories with .git."
