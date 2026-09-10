@@ -16,6 +16,10 @@
   (defvar tab-bar-tabs-function #'ignore)
   (provide 'tabspaces))
 
+;; `tab-bar-new-tab-choice' lives in tab-bar.el; declare it special (with a
+;; value) so `tabspaces-ext--new-clean-tab' can dynamically rebind it in batch.
+(defvar tab-bar-new-tab-choice nil)
+
 (unless (featurep 'window-state-plus)
   (provide 'window-state-plus))
 
@@ -211,6 +215,26 @@ the mode off must fully restore the unfiltered behaviour."
                                          'tabspaces--store-buffers))
             (should (equal tabspaces-ext-test--raw (tabspaces--store-buffers nil))))
         (tabspaces-ext-mode -1)))))
+
+;;; Tests for --new-clean-tab (no origin-tab buffer inheritance)
+
+(ert-deftest tabspaces-ext-test/new-clean-tab-overrides-clone ()
+  "`tabspaces-ext--new-clean-tab' forces `tab-bar-new-tab-choice' to a fresh
+*scratch* producer, so a new workspace tab never clones the origin tab --
+even when the user's global choice is the Emacs default `clone'."
+  (let ((tab-bar-new-tab-choice 'clone)   ; Emacs default: clone current tab
+        (seen 'unset))
+    (cl-letf (((symbol-function 'tab-bar-new-tab)
+               (lambda (&rest _)
+                 ;; Capture the choice in effect at creation time.
+                 (setq seen tab-bar-new-tab-choice))))
+      (tabspaces-ext--new-clean-tab))
+    ;; The helper rebound the choice away from `clone' ...
+    (should (functionp seen))
+    ;; ... to something that yields the *scratch* buffer.
+    (should (eq (get-buffer-create "*scratch*") (funcall seen)))
+    ;; ... and left the caller's global value untouched afterwards.
+    (should (eq 'clone tab-bar-new-tab-choice))))
 
 (provide 'tabspaces-ext-test)
 ;;; tabspaces-ext-test.el ends here

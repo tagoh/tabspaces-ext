@@ -104,6 +104,11 @@
 (require 'tabspaces)
 (require 'window-state-plus)
 
+;; Defined in tab-bar.el (loaded at runtime via tabspaces).  Declared here so
+;; byte-compiling the let-binding in `tabspaces-ext--new-clean-tab' does not
+;; warn about a free variable.
+(defvar tab-bar-new-tab-choice)
+
 ;;; Customization
 
 (defgroup tabspaces-ext nil
@@ -206,11 +211,24 @@ mode is on requires toggling the mode to re-install the advice."
   (or (member buffer-name '("*scratch*" "*Messages*"))
       (string-prefix-p " *Minibuf" buffer-name)))
 
+(defun tabspaces-ext--new-clean-tab ()
+  "Create a new tab that starts empty on *scratch*.
+`tab-bar-new-tab' honors `tab-bar-new-tab-choice', whose Emacs default
+\(`clone') copies the current tab's window layout and buffers into the new
+tab -- leaking the origin tab's buffers into the new workspace's buffer
+list, and thus into its saved session.  Bind the choice to a fresh
+*scratch* buffer so a new workspace tab never inherits the origin tab's
+contents, regardless of the user's global `tab-bar-new-tab-choice'.  This
+mirrors the guard tabspaces itself uses in
+`tabspaces-open-or-create-project-and-workspace'."
+  (let ((tab-bar-new-tab-choice (lambda () (get-buffer-create "*scratch*"))))
+    (tab-bar-new-tab)))
+
 (defun tabspaces-ext--switch-or-create-tab (tab-name project-root)
   "Switch to existing tab TAB-NAME or create new one for PROJECT-ROOT."
   (if (member tab-name (tabspaces-ext--get-all-tab-names))
       (tab-bar-switch-to-tab tab-name)
-    (tab-bar-new-tab)
+    (tabspaces-ext--new-clean-tab)
     (tab-bar-rename-tab tab-name)
     (tabspaces-ext--add-project-tab-mapping project-root tab-name)))
 

@@ -229,13 +229,12 @@ here keeps a worktree's magit buffer out of every tab but its own."
               (tab-bar-switch-to-tab expected-tab-name)
               (switch-to-buffer magit-buffer))
           ;; Create new tab
-          (tab-bar-new-tab)
+          (tabspaces-ext--new-clean-tab)
           (tab-bar-rename-tab expected-tab-name)
           (tabspaces-ext--add-project-tab-mapping project-root expected-tab-name)
-          ;; Show the magit buffer in the new tab.  Previously this relied on
-          ;; `tab-bar-new-tab' cloning the current buffer; with
-          ;; `tab-bar-new-tab-choice' set to "*scratch*" the new tab would
-          ;; otherwise land on *scratch* instead of the worktree status.
+          ;; The new tab starts empty (see `tabspaces-ext--new-clean-tab'), so
+          ;; display the worktree status explicitly rather than relying on
+          ;; whatever `tab-bar-new-tab' would otherwise put there.
           (switch-to-buffer magit-buffer))
         (setq-local project-current-directory project-root)))))
 
@@ -267,7 +266,7 @@ This is advice for `magit-worktree-status'."
             (let ((default-directory worktree-path))
               (magit-status-setup-buffer)))
         ;; Tab doesn't exist: create and visit
-        (tab-bar-new-tab)
+        (tabspaces-ext--new-clean-tab)
         (tab-bar-rename-tab expected-tab-name)
         (tabspaces-ext--add-project-tab-mapping worktree-path expected-tab-name)
         (when (fboundp 'project-remember-project)
