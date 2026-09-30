@@ -80,6 +80,37 @@ the treemacs sync."
         (should (string= (tabspaces-ext-treemacs--get-project-root-for-tab)
                          (expand-file-name dir)))))))
 
+;;; Tests for --cancel-pending-annotation-timers
+
+(ert-deftest tabspaces-ext-treemacs-test/cancel-only-annotation-timers ()
+  "Cancelling drops pending `treemacs--apply-annotations-deferred' timers and
+leaves unrelated timers running.  This is what stops treemacs' deferred timer
+from firing on a button our sync is about to delete (which crashes with
+\"number-or-marker-p nil\")."
+  (let* ((ran (list nil nil))
+         ;; A deferred-annotation timer (must be cancelled) and an unrelated one
+         ;; (must survive).
+         (ann-timer (run-with-timer
+                     100 nil #'treemacs--apply-annotations-deferred
+                     nil nil nil nil))
+         (other-timer (run-with-timer 100 nil #'ignore)))
+    (unwind-protect
+        (progn
+          (should (memq ann-timer timer-list))
+          (should (memq other-timer timer-list))
+          (tabspaces-ext-treemacs--cancel-pending-annotation-timers)
+          (should-not (memq ann-timer timer-list))
+          (should (memq other-timer timer-list)))
+      (ignore ran)
+      (cancel-timer ann-timer)
+      (cancel-timer other-timer))))
+
+(ert-deftest tabspaces-ext-treemacs-test/cancel-with-no-timers ()
+  "Cancelling is a no-op when no deferred-annotation timers are pending."
+  (let ((before (length timer-list)))
+    (tabspaces-ext-treemacs--cancel-pending-annotation-timers)
+    (should (= before (length timer-list)))))
+
 (provide 'tabspaces-ext-treemacs-test)
 
 ;;; tabspaces-ext-treemacs-test.el ends here

@@ -98,6 +98,22 @@ before treemacs is loaded, to support session restoration."
 
 ;;; Treemacs sync functions
 
+(defun tabspaces-ext-treemacs--cancel-pending-annotation-timers ()
+  "Cancel treemacs' pending deferred annotation timers.
+`treemacs-do-add-project-to-workspace' expands the freshly added project and
+schedules `treemacs--apply-annotations-deferred' on a short (0.5s) timer bound
+to the button it just created.  When a subsequent sync removes or re-adds
+projects, that button is deleted before the timer fires, so the timer aborts
+with \"(wrong-type-argument number-or-marker-p nil)\" -- an uncaught error that
+pollutes *Messages* on the first sync after treemacs opens (e.g. `treemacs--init'
+expands a project, then our advice re-syncs it 0.3s later).  Dropping the
+still-pending timers before we churn the buffer avoids the crash: our own
+add reschedules a fresh timer for the new button, and annotations are reapplied
+on the next treemacs refresh regardless."
+  (dolist (timer (copy-sequence timer-list))
+    (when (eq (timer--function timer) 'treemacs--apply-annotations-deferred)
+      (cancel-timer timer))))
+
 (defun tabspaces-ext-treemacs--get-project-root-for-tab ()
   "Get project root for current tabspaces tab.
 Resolves via `tabspaces-ext--tab-project-root' (numbered-suffix aware).
@@ -136,6 +152,10 @@ a tab as synced only when the sync actually happened."
                (paths (mapcar #'treemacs-project->path projects)))
           ;; Only sync if not already showing the correct single project
           (unless (and (= 1 (length projects)) (string= root (car paths)))
+            ;; Drop treemacs' pending deferred-annotation timers before we churn
+            ;; the buffer; otherwise they fire on buttons we are about to delete
+            ;; and crash with `number-or-marker-p nil'.
+            (tabspaces-ext-treemacs--cancel-pending-annotation-timers)
             ;; Remove mismatched projects
             (dolist (project projects)
               (unless (string= root (treemacs-project->path project))
