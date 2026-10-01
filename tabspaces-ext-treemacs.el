@@ -109,9 +109,15 @@ pollutes *Messages* on the first sync after treemacs opens (e.g. `treemacs--init
 expands a project, then our advice re-syncs it 0.3s later).  Dropping the
 still-pending timers before we churn the buffer avoids the crash: our own
 add reschedules a fresh timer for the new button, and annotations are reapplied
-on the next treemacs refresh regardless."
+on the next treemacs refresh regardless.
+
+Guard each entry with `timerp' before reaching into it: `timer--function'
+is `aref'-based, so a nil or non-timer entry in `timer-list' makes it signal
+\"(wrong-type-argument arrayp nil)\" -- an error that otherwise surfaces as a
+recurring \"Treemacs sync error\" on every tab switch."
   (dolist (timer (copy-sequence timer-list))
-    (when (eq (timer--function timer) 'treemacs--apply-annotations-deferred)
+    (when (and (timerp timer)
+               (eq (timer--function timer) 'treemacs--apply-annotations-deferred))
       (cancel-timer timer))))
 
 (defun tabspaces-ext-treemacs--get-project-root-for-tab ()

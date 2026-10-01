@@ -480,13 +480,31 @@ perpetuating the loss across restarts."
                           (setq unmapped (delete expected unmapped))
                           (unless unmapped (throw 'done t)))))))))))))))
 
+(defun tabspaces-ext-magit--resync-treemacs-after-repair ()
+  "Re-sync treemacs once project@branch mappings have been repaired.
+The treemacs sync that runs during restore (and when treemacs first opens)
+bails for a project@branch tab whose mapping is not yet present -- an
+unmapped \"@\" tab resolves to no root -- so it leaves whatever projects
+treemacs-tab-bar copied from its fallback workspace, which shows the tab a
+tree of unrelated projects instead of its own.  Now that
+`tabspaces-ext-magit--repair-project-tab-mappings' has restored the mapping,
+trim the current tab's workspace to its one project.
+
+Deferred to an idle moment so treemacs has finished its own restore/init
+first.  A no-op unless the treemacs integration is loaded and treemacs
+itself is available, so magit-only setups pay nothing."
+  (when (and (featurep 'treemacs)
+             (fboundp 'tabspaces-ext-treemacs--sync-with-tabspaces))
+    (run-with-idle-timer 0.5 nil #'tabspaces-ext-treemacs--sync-with-tabspaces)))
+
 (defun tabspaces-ext-magit--restore-session-advice (&rest _)
   "Cleanup after tabspaces session restoration."
   (tabspaces-ext-magit--cleanup-placeholder-tabs)
   (when (boundp 'tabspaces-project-tab-map)
     (setq tabspaces-project-tab-map
           (delete-dups tabspaces-project-tab-map)))
-  (tabspaces-ext-magit--repair-project-tab-mappings))
+  (tabspaces-ext-magit--repair-project-tab-mappings)
+  (tabspaces-ext-magit--resync-treemacs-after-repair))
 
 ;;; Setup/teardown functions
 
@@ -546,7 +564,10 @@ buffer from it via `magit-status-setup-buffer'."
     ;; Repair mappings lost during session restore (the :after advice on
     ;; tabspaces-restore-session is not yet active when the initial startup
     ;; restore runs, because magit hasn't loaded yet at that point).
-    (tabspaces-ext-magit--repair-project-tab-mappings)))
+    (tabspaces-ext-magit--repair-project-tab-mappings)
+    ;; With mappings now present, trim the treemacs workspace that the initial
+    ;; (pre-repair) sync could not resolve.
+    (tabspaces-ext-magit--resync-treemacs-after-repair)))
 
 ;;;###autoload
 (defun tabspaces-ext-magit-teardown ()

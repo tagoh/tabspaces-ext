@@ -165,6 +165,35 @@
         (should (= 1 (length tabspaces-project-tab-map)))
         (should (string= (cdar tabspaces-project-tab-map) "myrepo@develop"))))))
 
+;;; Tests for --resync-treemacs-after-repair
+
+(ert-deftest tabspaces-ext-magit-test/resync-treemacs-noop-without-integration ()
+  "Resync is a silent no-op when the treemacs integration is not loaded.
+A magit-only setup (no treemacs feature, no treemacs sync function) must
+pay nothing and never schedule a timer."
+  (let ((scheduled nil))
+    (cl-letf (((symbol-function 'run-with-idle-timer)
+               (lambda (&rest _) (setq scheduled t))))
+      ;; treemacs is not a feature in batch mode and the sync fn is unbound.
+      (should-not (featurep 'treemacs))
+      (should-not (fboundp 'tabspaces-ext-treemacs--sync-with-tabspaces))
+      (tabspaces-ext-magit--resync-treemacs-after-repair)
+      (should-not scheduled))))
+
+(ert-deftest tabspaces-ext-magit-test/resync-treemacs-schedules-sync ()
+  "With treemacs loaded and the sync fn available, resync schedules the sync.
+This is the content fix: after mappings are repaired, treemacs is trimmed
+to the tab's one project (deferred to an idle moment)."
+  (let ((scheduled-fn nil))
+    (cl-letf (((symbol-function 'featurep)
+               (lambda (f) (or (eq f 'treemacs) nil)))
+              ((symbol-function 'tabspaces-ext-treemacs--sync-with-tabspaces)
+               (lambda () t))
+              ((symbol-function 'run-with-idle-timer)
+               (lambda (_delay _repeat fn) (setq scheduled-fn fn))))
+      (tabspaces-ext-magit--resync-treemacs-after-repair)
+      (should (eq scheduled-fn #'tabspaces-ext-treemacs--sync-with-tabspaces)))))
+
 ;;; Tests for --infer-root-for-tab and buffer-based repair (Fix 1)
 
 (ert-deftest tabspaces-ext-magit-test/infer-root-picks-matching-worktree ()

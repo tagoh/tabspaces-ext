@@ -111,6 +111,23 @@ from firing on a button our sync is about to delete (which crashes with
     (tabspaces-ext-treemacs--cancel-pending-annotation-timers)
     (should (= before (length timer-list)))))
 
+(ert-deftest tabspaces-ext-treemacs-test/cancel-tolerates-non-timer-entries ()
+  "A nil (or non-timer) entry in `timer-list' must not crash the sweep.
+`timer--function' is `aref'-based, so calling it on nil signals
+\"(wrong-type-argument arrayp nil)\" -- the recurring \"Treemacs sync error\"
+seen on tab switches.  The `timerp' guard skips such entries while still
+cancelling a genuine deferred-annotation timer sitting beside the nil.
+
+Uses `timer-create' (not `run-with-timer') so the timer is never registered
+in the global `timer-list', keeping the test's binding fully isolated."
+  (let* ((ann-timer (timer-create)))
+    (timer-set-function ann-timer #'treemacs--apply-annotations-deferred)
+    (let ((timer-list (list nil ann-timer)))
+      (should (memq ann-timer timer-list))
+      ;; Must not signal despite the leading nil entry.
+      (tabspaces-ext-treemacs--cancel-pending-annotation-timers)
+      (should-not (memq ann-timer timer-list)))))
+
 (provide 'tabspaces-ext-treemacs-test)
 
 ;;; tabspaces-ext-treemacs-test.el ends here
