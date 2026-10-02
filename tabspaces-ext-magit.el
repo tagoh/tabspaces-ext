@@ -333,8 +333,8 @@ with valid callbacks before buffers are killed."
             (tab-bar-close-tab-by-name target-tab-name)))
 
         (when (and (featurep 'treemacs)
-                   (fboundp 'tabspaces-ext-treemacs--sync-with-tabspaces))
-          (tabspaces-ext-treemacs--sync-with-tabspaces))
+                   (fboundp 'tabspaces-ext-treemacs--reconcile))
+          (tabspaces-ext-treemacs--reconcile))
 
         (when (and (derived-mode-p 'magit-mode)
                    (ignore-errors (magit-gitdir)))
@@ -481,21 +481,20 @@ perpetuating the loss across restarts."
                           (unless unmapped (throw 'done t)))))))))))))))
 
 (defun tabspaces-ext-magit--resync-treemacs-after-repair ()
-  "Re-sync treemacs once project@branch mappings have been repaired.
-The treemacs sync that runs during restore (and when treemacs first opens)
-bails for a project@branch tab whose mapping is not yet present -- an
-unmapped \"@\" tab resolves to no root -- so it leaves whatever projects
-treemacs-tab-bar copied from its fallback workspace, which shows the tab a
-tree of unrelated projects instead of its own.  Now that
-`tabspaces-ext-magit--repair-project-tab-mappings' has restored the mapping,
-trim the current tab's workspace to its one project.
+  "Reconcile treemacs workspaces once project@branch mappings are repaired.
+At session restore, `treemacs-tab-bar' may create a tab's workspace before its
+`tabspaces-project-tab-map' entry exists, so it copies its fallback workspace
+and the tab shows a tree of unrelated projects instead of its own.  Now that
+`tabspaces-ext-magit--repair-project-tab-mappings' has restored the mappings,
+`tabspaces-ext-treemacs--reconcile' resets every mapped tab's workspace to its
+one project and redraws.
 
 Deferred to an idle moment so treemacs has finished its own restore/init
 first.  A no-op unless the treemacs integration is loaded and treemacs
 itself is available, so magit-only setups pay nothing."
   (when (and (featurep 'treemacs)
-             (fboundp 'tabspaces-ext-treemacs--sync-with-tabspaces))
-    (run-with-idle-timer 0.5 nil #'tabspaces-ext-treemacs--sync-with-tabspaces)))
+             (fboundp 'tabspaces-ext-treemacs--reconcile))
+    (run-with-idle-timer 0.5 nil #'tabspaces-ext-treemacs--reconcile)))
 
 (defun tabspaces-ext-magit--restore-session-advice (&rest _)
   "Cleanup after tabspaces session restoration."

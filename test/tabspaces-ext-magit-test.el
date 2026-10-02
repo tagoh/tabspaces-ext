@@ -169,30 +169,31 @@
 
 (ert-deftest tabspaces-ext-magit-test/resync-treemacs-noop-without-integration ()
   "Resync is a silent no-op when the treemacs integration is not loaded.
-A magit-only setup (no treemacs feature, no treemacs sync function) must
+A magit-only setup (no treemacs feature, no treemacs reconcile function) must
 pay nothing and never schedule a timer."
   (let ((scheduled nil))
     (cl-letf (((symbol-function 'run-with-idle-timer)
                (lambda (&rest _) (setq scheduled t))))
-      ;; treemacs is not a feature in batch mode and the sync fn is unbound.
+      ;; treemacs is not a feature in batch mode and the reconcile fn is unbound.
       (should-not (featurep 'treemacs))
-      (should-not (fboundp 'tabspaces-ext-treemacs--sync-with-tabspaces))
+      (should-not (fboundp 'tabspaces-ext-treemacs--reconcile))
       (tabspaces-ext-magit--resync-treemacs-after-repair)
       (should-not scheduled))))
 
-(ert-deftest tabspaces-ext-magit-test/resync-treemacs-schedules-sync ()
-  "With treemacs loaded and the sync fn available, resync schedules the sync.
-This is the content fix: after mappings are repaired, treemacs is trimmed
-to the tab's one project (deferred to an idle moment)."
+(ert-deftest tabspaces-ext-magit-test/resync-treemacs-schedules-reconcile ()
+  "With treemacs loaded and the reconcile fn available, resync schedules it.
+This is the content fix: after mappings are repaired, each mapped tab's
+treemacs workspace is reconciled to its one project (deferred to an idle
+moment)."
   (let ((scheduled-fn nil))
     (cl-letf (((symbol-function 'featurep)
                (lambda (f) (or (eq f 'treemacs) nil)))
-              ((symbol-function 'tabspaces-ext-treemacs--sync-with-tabspaces)
-               (lambda () t))
+              ((symbol-function 'tabspaces-ext-treemacs--reconcile)
+               (lambda (&rest _) t))
               ((symbol-function 'run-with-idle-timer)
                (lambda (_delay _repeat fn) (setq scheduled-fn fn))))
       (tabspaces-ext-magit--resync-treemacs-after-repair)
-      (should (eq scheduled-fn #'tabspaces-ext-treemacs--sync-with-tabspaces)))))
+      (should (eq scheduled-fn #'tabspaces-ext-treemacs--reconcile)))))
 
 ;;; Tests for --infer-root-for-tab and buffer-based repair (Fix 1)
 

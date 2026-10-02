@@ -25,9 +25,11 @@ Each integration is completely optional and loads only when its customization va
 - **Project mapping persistence** - Maintains project-to-tab mappings across sessions
 
 #### Treemacs Integration (`tabspaces-ext-treemacs`)
-- **Per-tab workspace sync** - Automatically shows only the current tab's project
-- **Automatic sync on tab switch** - Updates treemacs when switching between tabs
-- **Session restoration** - Restores treemacs state when loading saved sessions
+Modern treemacs provides per-tab workspaces and tab-switch syncing natively via
+`treemacs-tab-bar` (the `Tabs` scope). This module fills the remaining gaps:
+- **Correct per-tab project** - Registers a resolver so `treemacs-tab-bar` creates each tab's workspace with the tab's real project (from `tabspaces-project-tab-map`) instead of copying the shared fallback workspace
+- **Session restoration** - Restores treemacs buffers when loading saved tabspaces sessions
+- **Restore-time reconcile** - After mappings are repaired at restore, resets each mapped tab's workspace to its one project
 - **Debug command** - `tabspaces-ext-treemacs-sync-debug` for troubleshooting
 
 #### Popterm Integration (`tabspaces-ext-popterm`)
@@ -194,13 +196,15 @@ This command toggles the popterm terminal for the current tab, automatically usi
 
 #### Debug Sync Issues
 
-If treemacs isn't syncing correctly:
+If a tab's treemacs workspace shows the wrong project:
 
 ```elisp
 M-x tabspaces-ext-treemacs-sync-debug
 ```
 
-This shows diagnostic information about the current tab, project mappings, and treemacs workspace state.
+This reports the current tab, its mapped project root, and its treemacs
+workspace's projects, then runs a reconcile to reset mapped tabs' workspaces to
+their one project.
 
 ## Using window-state-plus independently
 
